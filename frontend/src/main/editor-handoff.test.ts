@@ -72,4 +72,64 @@ describe("editor handoff", () => {
 			"Could not open VS Code. Check that it is installed and try again.",
 		);
 	});
+
+	it("on Windows finds a user-install Cursor shim that is not on PATH", async () => {
+		const local = "C:/Users/tester/AppData/Local";
+		const cursorShim = `${local}/Programs/Cursor/bin/cursor.cmd`;
+		const input = deps({
+			platform: "win32",
+			env: {
+				PATH: "C:/Windows/System32",
+				PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				LOCALAPPDATA: local,
+			},
+			homeDir: "C:/Users/tester",
+			isExecutable: (candidatePath) => candidatePath === cursorShim,
+			isDirectory: () => false,
+		});
+		const handoff = createEditorHandoff(input);
+		const state = await handoff.getState("ao-1");
+		expect(state.targets.map(({ id }) => id)).toEqual(["cursor", "file-manager", "terminal"]);
+		await expect(handoff.open({ sessionId: "ao-1", targetId: "cursor" })).resolves.toMatchObject({
+			id: "cursor",
+			kind: "editor",
+		});
+		expect(input.launch).toHaveBeenCalledWith(cursorShim, ["/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
+	it("on Windows prefers a PATH shim over a probed user-install", async () => {
+		const local = "C:/Users/tester/AppData/Local";
+		const pathShim = "C:/Windows/System32/cursor.cmd";
+		const probed = `${local}/Programs/Cursor/bin/cursor.cmd`;
+		const input = deps({
+			platform: "win32",
+			env: {
+				PATH: "C:/Windows/System32",
+				PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				LOCALAPPDATA: local,
+			},
+			homeDir: "C:/Users/tester",
+			isExecutable: (candidatePath) => candidatePath === pathShim || candidatePath === probed,
+			isDirectory: () => false,
+		});
+		const handoff = createEditorHandoff(input);
+		await handoff.open({ sessionId: "ao-1", targetId: "cursor" });
+		expect(input.launch).toHaveBeenCalledWith(pathShim, ["/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
+	it("on Windows reports no editors when PATH and probed dirs are empty", async () => {
+		const handoff = createEditorHandoff(deps({
+			platform: "win32",
+			env: {
+				PATH: "C:/Windows/System32",
+				PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				LOCALAPPDATA: "C:/Users/tester/AppData/Local",
+			},
+			homeDir: "C:/Users/tester",
+			isExecutable: () => false,
+			isDirectory: () => false,
+		}));
+		const state = await handoff.getState("ao-1");
+		expect(state.targets.map(({ id }) => id)).toEqual(["file-manager", "terminal"]);
+	});
 });
