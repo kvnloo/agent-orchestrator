@@ -1,6 +1,7 @@
 package codexappserver
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -204,10 +205,42 @@ func TestGeneratedProtocolMatchesTheInstalledProvider(t *testing.T) {
 			len(missing), truncate(missing))
 	}
 	// A method AO's generated file has and the provider does not is the dangerous
-	// direction: any call to it fails at runtime.
+	// direction: any call to it fails at runtime — but only when the installed
+	// Codex is at least as new as the pin. An older CLI is the same situation as
+	// "codex not installed": the environment cannot validate the generated file.
 	if len(extra) > 0 {
+		if out, err := installedCodexVersion(context.Background(), bin); err == nil {
+			installed, okI := parseCodexVersion(out)
+			pin, okP := parseCodexVersion(codexproto.ProviderVersion)
+			if okI && okP && installed.less(pin) {
+				t.Skipf("installed Codex %s is older than generated pin %s; extra methods are expected: %v",
+					installed, pin, truncate(extra))
+			}
+		}
 		t.Errorf("generated protocol declares %d method(s) the installed provider does not: %v",
 			len(extra), truncate(extra))
+	}
+}
+
+func TestParseCodexVersionOlderThanPin(t *testing.T) {
+	cases := []struct {
+		installed, pin string
+		older          bool
+	}{
+		{"codex-cli 0.142.5", "codex-cli 0.146.0", true},
+		{"codex-cli 0.146.0", "codex-cli 0.146.0", false},
+		{"codex-cli 0.147.0", "codex-cli 0.146.0", false},
+		{"0.142.5", "0.146.0", true},
+		{"not-a-version", "codex-cli 0.146.0", false},
+		{"", "codex-cli 0.146.0", false},
+	}
+	for _, tc := range cases {
+		installed, okI := parseCodexVersion(tc.installed)
+		pin, okP := parseCodexVersion(tc.pin)
+		got := okI && okP && installed.less(pin)
+		if got != tc.older {
+			t.Errorf("parseCodexVersion(%q).less(%q) = %v, want %v", tc.installed, tc.pin, got, tc.older)
+		}
 	}
 }
 
