@@ -167,7 +167,8 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		return Project{}, err
 	}
 	id := defaultProjectID(path)
-	if in.ProjectID != nil {
+	userSuppliedID := in.ProjectID != nil
+	if userSuppliedID {
 		id = domain.ProjectID(strings.TrimSpace(*in.ProjectID))
 	}
 	if err := validateProjectID(id); err != nil {
@@ -201,10 +202,20 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
 		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	} else if ok && existing.ArchivedAt.IsZero() && existing.Path != path {
-		return Project{}, apierr.Conflict("ID_ALREADY_REGISTERED", "A project with this id is already registered for a different path", map[string]any{
-			"existingProjectId":  existing.ID,
-			"suggestedProjectId": string(m.suggestID(ctx, id)),
-		})
+		if userSuppliedID {
+			return Project{}, apierr.Conflict("ID_ALREADY_REGISTERED", "A project with this id is already registered for a different path", map[string]any{
+				"existingProjectId":  existing.ID,
+				"suggestedProjectId": string(m.suggestID(ctx, id)),
+			})
+		}
+		// Desktop (and CLI without --id) derive the id from the folder basename.
+		// Two repos named "api" at different paths used to 409; use the same
+		// suffix the error already suggested, and keep the display name as the
+		// original basename.
+		id = m.suggestID(ctx, id)
+		if err := validateProjectID(id); err != nil {
+			return Project{}, err
+		}
 	}
 
 	var projectConfig domain.ProjectConfig
