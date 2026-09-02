@@ -89,10 +89,39 @@ function executableNames(command: string, platform: Platform, env: NodeJS.Proces
 	return [command, ...extensions.map((extension) => command + extension.toLowerCase()), ...extensions.map((extension) => command + extension.toUpperCase())];
 }
 
+function windowsEditorBinDirs(env: NodeJS.ProcessEnv): string[] {
+	const local = env.LOCALAPPDATA;
+	const programFiles = env.ProgramFiles || env["PROGRAMFILES"];
+	const programFilesX86 = env["ProgramFiles(x86)"] || env["PROGRAMFILES(X86)"];
+	const roots = [local ? path.join(local, "Programs") : undefined, programFiles, programFilesX86].filter(
+		(root): root is string => Boolean(root),
+	);
+	const vendors = [
+		"Cursor",
+		"Microsoft VS Code",
+		"Microsoft VS Code Insiders",
+		"Windsurf",
+		"VSCodium",
+		"Zed",
+		"Trae",
+		"Kiro",
+		"Positron",
+	];
+	const dirs: string[] = [];
+	for (const root of roots) {
+		for (const vendor of vendors) {
+			dirs.push(path.join(root, vendor, "bin"));
+		}
+	}
+	if (local) dirs.push(path.join(local, "JetBrains", "Toolbox", "scripts"));
+	return dirs;
+}
+
 function commandSearchDirs(platform: Platform, env: NodeJS.ProcessEnv): string[] {
 	const fromPath = (env.PATH || "").split(path.delimiter).filter(Boolean);
 	if (platform === "darwin") return [...fromPath, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 	if (platform === "linux") return [...fromPath, "/usr/local/bin", "/usr/bin"];
+	if (platform === "win32") return [...fromPath, ...windowsEditorBinDirs(env)];
 	return fromPath;
 }
 
