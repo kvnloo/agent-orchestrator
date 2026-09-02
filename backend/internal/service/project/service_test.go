@@ -1054,6 +1054,53 @@ func TestManager_AddValidationAndConflicts(t *testing.T) {
 	wantCode(t, err, "ID_ALREADY_REGISTERED")
 }
 
+func TestManager_AddSuffixesDerivedIDWhenBasenameCollides(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	configureCommitter(t)
+
+	parentA := t.TempDir()
+	parentB := t.TempDir()
+	repoA := filepath.Join(parentA, "api")
+	repoB := filepath.Join(parentB, "api")
+	if err := os.Mkdir(repoA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(repoB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRepoWithCommitNoOrigin(t, repoA)
+	gitRepoWithCommitNoOrigin(t, repoB)
+
+	first, err := m.Add(ctx, project.AddInput{Path: repoA})
+	if err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	if first.ID != "api" {
+		t.Fatalf("first ID = %q, want api", first.ID)
+	}
+
+	second, err := m.Add(ctx, project.AddInput{Path: repoB})
+	if err != nil {
+		t.Fatalf("second Add (derived collision): %v", err)
+	}
+	if second.ID != "api1" {
+		t.Fatalf("second ID = %q, want api1", second.ID)
+	}
+	if second.Name != "api" {
+		t.Fatalf("second Name = %q, want api (basename display)", second.Name)
+	}
+
+	repoCParent := t.TempDir()
+	repoC := filepath.Join(repoCParent, "other")
+	if err := os.Mkdir(repoC, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRepoWithCommitNoOrigin(t, repoC)
+	_, err = m.Add(ctx, project.AddInput{Path: repoC, ProjectID: ptr("api")})
+	wantCode(t, err, "ID_ALREADY_REGISTERED")
+}
+
 // gitRepoWithOrigin creates a real git repo with an `origin` remote pointing
 // at `originURL`. Used to assert project.Add captures the origin at add time.
 func gitRepoWithOrigin(t *testing.T, originURL string) string {
