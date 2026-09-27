@@ -979,6 +979,14 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 	}
 }
 
+func TestSpawnRejectsInvalidPermissionBeforeNetwork(t *testing.T) {
+	setConfigEnv(t)
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--standalone", "--agent", "codex", "--name", "worker", "--permission", "yolo")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--permission must be") {
+		t.Fatalf("err=%v exit=%d, want local permission usage error", err, ExitCode(err))
+	}
+}
+
 // TestSpawnTuningFlagWiring asserts explicit per-spawn tuning reaches the daemon.
 // An explicit approval mode also prevents parent-orchestrator inheritance from
 // overriding the caller's choice server-side.
