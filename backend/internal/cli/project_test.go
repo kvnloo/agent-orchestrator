@@ -62,7 +62,6 @@ func TestProjectSetConfig_TrackerIntakeFlags(t *testing.T) {
 	}
 }
 
-
 func TestProjectSetConfig_PreservesEffortFromConfigJSON(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
