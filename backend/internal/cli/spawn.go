@@ -98,6 +98,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
 			}
+			switch opts.permission {
+			case "", "default", "accept-edits", "auto", "bypass-permissions":
+			default:
+				return usageError{fmt.Errorf(`--permission must be "default", "accept-edits", "auto", or "bypass-permissions"`)}
+			}
 			if opts.standalone {
 				if opts.kind == "orchestrator" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
