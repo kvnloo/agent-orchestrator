@@ -30,6 +30,8 @@ type spawnOptions struct {
 	issue           string
 	name            string
 	model           string
+	effort          string
+	permission      string
 	claimPR         string
 	noTakeover      bool
 	skipAgentCheck  bool
@@ -49,6 +51,8 @@ type spawnRequest struct {
 	Branch          string `json:"branch,omitempty"`
 	Prompt          string `json:"prompt,omitempty"`
 	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
 	DisplayName     string `json:"displayName"`
 }
 
@@ -93,6 +97,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
+			}
+			switch opts.permission {
+			case "", "default", "accept-edits", "auto", "bypass-permissions":
+			default:
+				return usageError{fmt.Errorf(`--permission must be "default", "accept-edits", "auto", or "bypass-permissions"`)}
 			}
 			if opts.standalone {
 				if opts.kind == "orchestrator" {
@@ -164,6 +173,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Branch:          opts.branch,
 				Prompt:          opts.prompt,
 				Model:           strings.TrimSpace(opts.model),
+				Effort:          strings.TrimSpace(opts.effort),
+				ApprovalMode:    strings.TrimSpace(opts.permission),
 				DisplayName:     name,
 			}
 			var res spawnResult
@@ -225,6 +236,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
+	f.StringVar(&opts.effort, "effort", "", "Agent effort override for this session only (e.g. low, medium, high)")
+	f.StringVar(&opts.permission, "permission", "", "Permission mode override for this session only: default, accept-edits, auto, bypass-permissions")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
