@@ -665,6 +665,7 @@ type fakeAgent struct {
 	failLoadErr         error // the SDK coerces a plain error into -32603
 	loadCalls           int
 	resumeCalls         int
+	resumeErr           error
 	promptParams        acpsdk.PromptRequest
 	promptNoPermission  bool
 	elicitation         *acpsdk.UnstableCreateElicitationRequest
@@ -910,8 +911,9 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.mu.Lock()
 	a.resumeParams = params
 	a.resumeCalls++
+	err := a.resumeErr
 	a.mu.Unlock()
-	return acpsdk.ResumeSessionResponse{}, nil
+	return acpsdk.ResumeSessionResponse{}, err
 }
 func (a *fakeAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
 	a.mu.Lock()
@@ -1922,6 +1924,48 @@ func TestACPDriverCanResumeContextWhenHistoryLoadFails(t *testing.T) {
 	}
 	if _, err := conv.(ports.ChatHistoryReader).ReadHistory(context.Background()); !errors.Is(err, ports.ErrChatHistoryUnavailable) {
 		t.Fatalf("ReadHistory error = %v, want ErrChatHistoryUnavailable", err)
+	}
+}
+
+func TestACPDriverHistorylessFallbackResumeFailureIsInconclusive(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{
+			LoadSession: true,
+			SessionCapabilities: acpsdk.SessionCapabilities{
+				Resume: &acpsdk.SessionResumeCapabilities{},
+			},
+		},
+		failLoadFrom: 1,
+		failLoadErr:  errors.New("transcript replay failed"),
+		resumeErr:    errors.New("temporary resume transport failure"),
+	}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		ProviderConversationID:    "provider-session-1",
+		WorkspacePath:             t.TempDir(),
+		AllowResumeWithoutHistory: true,
+	})
+	if err == nil {
+		t.Fatal("Resume error = nil, want recovery-inconclusive failure")
+	}
+	if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("Resume error = %v, want ErrChatRecoveryInconclusive", err)
+	}
+	if errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("Resume error = %v, must not become permanently unrecoverable before bounded retries", err)
+	}
+
+	agent.mu.Lock()
+	loadCalls, resumeCalls := agent.loadCalls, agent.resumeCalls
+	agent.mu.Unlock()
+	if loadCalls != 1 || resumeCalls != 1 {
+		t.Fatalf("session/load calls = %d, session/resume calls = %d, want 1 each", loadCalls, resumeCalls)
 	}
 }
 
