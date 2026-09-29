@@ -540,5 +540,8 @@ func (c *Coordinator) recover(
 	if errors.Is(err, postgres.ErrTransitionStale) {
 		return errCoordinationLost
 	}
+	if err == nil {
+		delete(c.retries, transition.ID)
+	}
 	return err
 }
