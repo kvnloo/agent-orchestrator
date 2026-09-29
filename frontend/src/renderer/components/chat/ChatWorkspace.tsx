@@ -1159,6 +1159,19 @@ function ChatWorkspaceContent({
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
 	const stableUserInputRequestIds = useStableValue(userInputRequestIds);
+	const [elicitationResolveErrors, setElicitationResolveErrors] = useState<Record<string, string>>({});
+	const setElicitationResolveError = useCallback((requestId: string, error?: string) => {
+		setElicitationResolveErrors((current) => {
+			if (!error) {
+				if (!(requestId in current)) return current;
+				const next = { ...current };
+				delete next[requestId];
+				return next;
+			}
+			if (current[requestId] === error) return current;
+			return { ...current, [requestId]: error };
+		});
+	}, []);
 	const composerSettings = useMemo(
 		() =>
 			onChooseSettings || onChooseConfigOption ? (
@@ -1252,8 +1265,9 @@ function ChatWorkspaceContent({
 		// and vice versa.
 		for (const requestId of stableUserInputRequestIds.resolved) {
 			setChatDraftBoundary(snapshot.sessionId, elicitationBoundarySource(requestId), undefined);
+			setElicitationResolveError(requestId, undefined);
 		}
-	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, stableUserInputRequestIds]);
+	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, setElicitationResolveError, stableUserInputRequestIds]);
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
@@ -1263,9 +1277,11 @@ function ChatWorkspaceContent({
 					sessionId={snapshot.sessionId}
 					conversationId={snapshot.conversationId}
 					onResolve={onResolveInput}
+					resolveError={stablePendingUserInput.requestId ? elicitationResolveErrors[stablePendingUserInput.requestId] : undefined}
+					onResolveError={setElicitationResolveError}
 				/>
 			) : undefined,
-		[onResolveInput, snapshot.conversationId, snapshot.sessionId, stablePendingUserInput],
+		[elicitationResolveErrors, onResolveInput, setElicitationResolveError, snapshot.conversationId, snapshot.sessionId, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
