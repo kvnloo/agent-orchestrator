@@ -897,6 +897,45 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("forgets failed-write draft memory once the request resolves elsewhere", async () => {
+		const user = userEvent.setup();
+		const pending = withUserInput("pending");
+		const durableStorage = window.localStorage;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (key === elicitationDraftKey(chatFixture.conversationId, "input-1")) {
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+			key: durableStorage.key.bind(durableStorage),
+			get length() {
+				return durableStorage.length;
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+
+		try {
+			const view = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+			await user.click(screen.getByRole("radio", { name: "ACP" }));
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed"));
+
+			// Another surface resolves the request. Reconciliation must clear both
+			// the leave boundary and the module-level fallback answer.
+			view.rerender(<ChatWorkspace snapshot={withUserInput("completed")} onResolveInput={vi.fn()} />);
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBeUndefined());
+			view.unmount();
+
+			render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+			expect(screen.getByRole("radio", { name: "ACP" })).not.toBeChecked();
+		} finally {
+			localStorage.mockRestore();
+			setChatDraftBoundary(chatFixture.sessionId, elicitationBoundarySource("input-1"), undefined);
+		}
+	});
+
 	it("reports a failed elicitation draft write through the session's leave/quit boundary", async () => {
 		// Dropping the sessionId prop the dock is given, or always passing it
 		// undefined, keeps every other elicitation test in this file green —

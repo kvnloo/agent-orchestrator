@@ -114,7 +114,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
-import { ElicitationDock, elicitationBoundarySource } from "./ElicitationDock";
+import { ElicitationDock, elicitationBoundarySource, forgetUnsavedElicitationDraft } from "./ElicitationDock";
 import {
 	pruneExpiredElicitationDraftsOnce,
 	reconcileElicitationDraftsForConversation,
@@ -1251,6 +1251,7 @@ function ChatWorkspaceContent({
 		// worker's request ids at all — can't reach into the worker's slots,
 		// and vice versa.
 		for (const requestId of stableUserInputRequestIds.resolved) {
+			forgetUnsavedElicitationDraft(snapshot.conversationId, requestId);
 			setChatDraftBoundary(snapshot.sessionId, elicitationBoundarySource(requestId), undefined);
 		}
 	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, stableUserInputRequestIds]);
