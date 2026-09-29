@@ -113,7 +113,7 @@ func TestValidateTurnSettingsAcceptsOpaqueModelValues(t *testing.T) {
 	}
 }
 
-func TestPermissionPolicyAnswersOnceForAutoAndEdits(t *testing.T) {
+func TestPermissionPolicyAnswersAutoEditsAndBypass(t *testing.T) {
 	allow := acpsdk.PermissionOptionKindAllowOnce
 	edit := acpsdk.ToolKindEdit
 	params := func(kind *acpsdk.ToolKind) acpsdk.RequestPermissionRequest {
@@ -136,6 +136,18 @@ func TestPermissionPolicyAnswersOnceForAutoAndEdits(t *testing.T) {
 	}
 	if _, ok := permissionPolicy(ports.PermissionModeAcceptEdits, params(nil)); ok {
 		t.Fatal("accept-edits answered a non-edit tool")
+	}
+	// bypass must not park for human approval. Prefer allow-always when the
+	// provider exposes it, and fall back to allow-once when it does not.
+	withAlways := params(nil)
+	withAlways.Options = append(withAlways.Options, acpsdk.PermissionOption{
+		OptionId: "always", Kind: acpsdk.PermissionOptionKindAllowAlways,
+	})
+	if id, ok := permissionPolicy(ports.PermissionModeBypassPermissions, withAlways); !ok || id != "always" {
+		t.Fatalf("bypass with allow-always = (%q, %v), want (always, true)", id, ok)
+	}
+	if id, ok := permissionPolicy(ports.PermissionModeBypassPermissions, params(nil)); !ok || id != "allow" {
+		t.Fatalf("bypass with allow-once = (%q, %v), want (allow, true)", id, ok)
 	}
 	// default stays out of the way entirely.
 	if _, ok := permissionPolicy(ports.PermissionModeDefault, params(&edit)); ok {
