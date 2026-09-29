@@ -138,6 +138,43 @@ describe("createEventTransport", () => {
 		expect(accountSources()[0].listeners).toContain("codex_account");
 	});
 
+	it("catches up event-derived state immediately when the renderer becomes visible", () => {
+		vi.useFakeTimers();
+		try {
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			vi.mocked(client.invalidateQueries).mockClear();
+
+			Object.defineProperty(document, "visibilityState", {
+				configurable: true,
+				get: () => "hidden",
+			});
+			document.dispatchEvent(new Event("visibilitychange"));
+			expect(client.invalidateQueries).not.toHaveBeenCalled();
+
+			Object.defineProperty(document, "visibilityState", {
+				configurable: true,
+				get: () => "visible",
+			});
+			document.dispatchEvent(new Event("visibilitychange"));
+			expect(client.invalidateQueries).toHaveBeenCalledWith(
+				{ queryKey: ["workspaces"] },
+				{ cancelRefetch: false },
+			);
+			expect(client.invalidateQueries).toHaveBeenCalledWith(
+				{ queryKey: ["conversation"] },
+				{ cancelRefetch: false },
+			);
+
+			vi.mocked(client.invalidateQueries).mockClear();
+			disconnect();
+			document.dispatchEvent(new Event("visibilitychange"));
+			expect(client.invalidateQueries).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not reconnect when a daemon status keeps the same base URL", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
