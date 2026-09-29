@@ -453,6 +453,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "prime-agent", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "autohand", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "fx", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "deepseek-harness", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
 	}
 
 	for _, tc := range tests {
