@@ -61,7 +61,7 @@ export function ResumeAgentControl({
 	// Cloud sessions re-provision through the control plane (useRestoreSession),
 	// not this local-daemon route — the local daemon has never heard of them and
 	// would answer "Unknown session".
-	if (!canResume || workspaceHandoff.data?.workspaceAvailable !== true) return null;
+	if (!canResume || workspaceHandoff.data?.workspaceAvailable === false) return null;
 
 	const error = resume.error instanceof Error ? resume.error.message : null;
 	const control = (

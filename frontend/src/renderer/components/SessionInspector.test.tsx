@@ -1450,6 +1450,25 @@ describe("SessionInspector Activity section", () => {
     );
   });
 
+  it("keeps agent resume available when the workspace probe fails", async () => {
+    vi.spyOn(window.ao!.editorHandoff, "getState").mockRejectedValueOnce(
+      new Error("editor handoff bridge unavailable"),
+    );
+
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          status: "exited",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Resume agent" }),
+    ).toBeInTheDocument();
+  });
+
   it("does not offer agent resume while an agent switch owns the exited source", () => {
     renderWithQuery(
       <SessionInspector
