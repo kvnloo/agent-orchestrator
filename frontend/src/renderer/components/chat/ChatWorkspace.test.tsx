@@ -994,6 +994,68 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled();
 	});
 
+	it("retains a failed resolve when a newer question replaces the submitting dock", async () => {
+		const user = userEvent.setup();
+		const snapshotA = withUserInput("pending");
+		let rejectFirst!: (reason: Error) => void;
+		const firstResolve = new Promise<void>((_resolve, reject) => {
+			rejectFirst = reject;
+		});
+		const onResolveInput = vi.fn((requestId: string) =>
+			requestId === "input-1" ? firstResolve : Promise.resolve(),
+		);
+		const view = render(<ChatWorkspace snapshot={snapshotA} onResolveInput={onResolveInput} />);
+
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(screen.getByRole("button", { name: "Sending answer" })).toBeInTheDocument();
+
+		// Q1 remains pending in durable history, but a newer Q2 becomes the dock.
+		const snapshotB = structuredClone(snapshotA);
+		snapshotB.items.push({
+			kind: "activity",
+			id: "input-2",
+			sequence: 101,
+			revision: 1,
+			turnId: "turn-1",
+			activityKind: "user_input",
+			status: "pending",
+			summary: "Choose a language",
+			requestId: "input-2",
+			detail: {
+				inputMode: "form",
+				message: "Choose a language",
+				schema: {
+					type: "object",
+					properties: {
+						question_0: { type: "string", title: "Which language?", oneOf: [{ const: "go", title: "Go" }] },
+					},
+				},
+			},
+			createdAt: "2026-08-24T00:01:00Z",
+		});
+		view.rerender(<ChatWorkspace snapshot={snapshotB} onResolveInput={onResolveInput} />);
+		expect(screen.getByRole("radio", { name: "Go" })).toBeInTheDocument();
+
+		await act(async () => {
+			rejectFirst(new Error("Q1 answer was not sent"));
+			await Promise.resolve();
+		});
+		// The failure belongs to Q1, so it must not contaminate Q2.
+		expect(screen.queryByText("Q1 answer was not sent")).not.toBeInTheDocument();
+
+		const snapshotC = structuredClone(snapshotB);
+		const second = snapshotC.items.find(
+			(item) => item.kind === "activity" && item.requestId === "input-2",
+		);
+		if (!second || second.kind !== "activity") throw new Error("missing second question fixture");
+		second.status = "completed";
+		view.rerender(<ChatWorkspace snapshot={snapshotC} onResolveInput={onResolveInput} />);
+
+		await waitFor(() => expect(screen.getByText("Q1 answer was not sent")).toBeInTheDocument());
+		expect(screen.getByRole("radio", { name: "ACP" })).toBeChecked();
+	});
+
 	it("does not interrupt while an elicitation is open", () => {
 		const onInterrupt = vi.fn();
 		const snapshot = structuredClone(chatFixture);
