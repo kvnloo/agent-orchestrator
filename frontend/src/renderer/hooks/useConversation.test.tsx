@@ -240,6 +240,47 @@ describe("accepted conversation sends", () => {
 		expect(result.current.pendingAcceptedTurnId).toBe("turn-1");
 	});
 
+	it("does not leak optimistic delivery state into a reused session id", async () => {
+		postMock.mockResolvedValue({
+			data: { duplicate: false, turnId: "turn-old-incarnation" },
+			error: undefined,
+		});
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const HookWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result, rerender } = renderHook(
+			({ incarnation }) => useConversationCommands("ao-reused", incarnation),
+			{ initialProps: { incarnation: "created-old" }, wrapper: HookWrapper },
+		);
+
+		await act(async () => {
+			await result.current.send({
+				text: "old incarnation work",
+				clientMessageId: "client-old-incarnation",
+			});
+		});
+		expect(result.current.pendingAcceptedTurnId).toBe("turn-old-incarnation");
+		expect(result.current.localEchos).toMatchObject([
+			{ clientMessageId: "client-old-incarnation", text: "old incarnation work" },
+		]);
+
+		rerender({ incarnation: "created-new" });
+		expect(result.current.pendingAcceptedTurnId).toBeUndefined();
+		expect(result.current.localEchos).toEqual([]);
+		expect(result.current.busy).toBe(false);
+
+		await act(async () => {
+			await result.current.send({
+				text: "new incarnation work",
+				clientMessageId: "client-new-incarnation",
+			});
+		});
+		expect(postMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("retains an in-flight send when Chat unmounts before the response", async () => {
 		const response = deferred<{
 			data: { turnId: string };
