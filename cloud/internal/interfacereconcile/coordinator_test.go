@@ -659,6 +659,54 @@ func TestReconcileRecoveryReleasesMessagesOnlyAfterControllerReady(t *testing.T)
 	}
 }
 
+func TestPendingRetryBudgetResetsAfterSuccessfulPhase(t *testing.T) {
+	transition := testTransition(domain.SessionInterfaceTransitionSourceStopping)
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+	driver := &fakeDriver{
+		Inspection: SourceInspection{Idle: true},
+		nativeID:   "native-resumed",
+		stopErr:    errPendingWorkerCommand,
+	}
+	coordinator := New(store, driver, Options{
+		Interval: time.Millisecond, MaxPendingRetries: 2, Logger: slog.New(slog.DiscardHandler),
+	})
+
+	// Consume the entire retry allowance waiting for source stop.
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatalf("pending stop attempt %d: %v", attempt+1, err)
+		}
+	}
+	if got := coordinator.retries[transition.ID]; got != 2 {
+		t.Fatalf("source-stop retries = %d, want 2", got)
+	}
+
+	// Source stop now succeeds, but the next independent worker command is
+	// pending. It must start at attempt 1 rather than inheriting attempt 3.
+	driver.stopErr = nil
+	driver.nativeIDErr = errPendingWorkerCommand
+	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("native-id pending: %v", err)
+	}
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionSourceStopped {
+		t.Fatalf("phase = %q, want source_stopped", got)
+	}
+	if got := coordinator.retries[transition.ID]; got != 1 {
+		t.Fatalf("native-id retries = %d, want fresh phase budget at 1", got)
+	}
+
+	driver.nativeIDErr = nil
+	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("final reconcile: %v", err)
+	}
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %q, want completed", got)
+	}
+	if _, ok := coordinator.retries[transition.ID]; ok {
+		t.Fatalf("completed transition kept retry state: %v", coordinator.retries)
+	}
+}
+
 func TestReconcilePendingWorkerCommandRecovers(t *testing.T) {
 	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRequested)}}
 	driver := &fakeDriver{
