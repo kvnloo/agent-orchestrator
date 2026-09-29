@@ -369,6 +369,9 @@ func (c *Coordinator) restoreSource(ctx context.Context, transition postgres.Coo
 	if errors.Is(err, postgres.ErrTransitionStale) {
 		return errCoordinationLost
 	}
+	if err == nil {
+		delete(c.retries, transition.ID)
+	}
 	return err
 }
 
@@ -473,6 +476,9 @@ func (c *Coordinator) advance(
 	}
 	transition.Phase = to
 	transition.NativeConversationID = nativeID
+	// Pending worker commands are retried per durable phase. Once this phase
+	// succeeds, a later independent worker command gets a fresh retry budget.
+	delete(c.retries, transition.ID)
 	return nil
 }
 
@@ -504,6 +510,9 @@ func (c *Coordinator) fail(
 	)
 	if errors.Is(err, postgres.ErrTransitionStale) {
 		return errCoordinationLost
+	}
+	if err == nil {
+		delete(c.retries, transition.ID)
 	}
 	return err
 }
