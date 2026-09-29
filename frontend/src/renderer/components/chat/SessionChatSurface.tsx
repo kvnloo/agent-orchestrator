@@ -191,7 +191,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId);
+	const commands = useConversationCommands(session.id, hostId, session.createdAt);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
