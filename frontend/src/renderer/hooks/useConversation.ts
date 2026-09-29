@@ -70,12 +70,14 @@ export interface ConversationSendInput {
 
 interface ConversationSendMutationInput {
 	targetSessionId: string;
+	targetStateKey: string;
 	clientMessageId: string;
 	input: ConversationSendInput;
 }
 
 interface ConversationSessionMutationInput {
 	targetSessionId: string;
+	targetStateKey: string;
 }
 
 interface ConversationRetryMutationInput extends ConversationSessionMutationInput {
@@ -103,6 +105,10 @@ export function conversationConfigOptionsQueryKey(sessionId: string) {
 
 const conversationDispatchTrackingQueryKey = ["conversation-dispatch-tracking"] as const;
 const conversationLocalEchosQueryKey = ["conversation-local-echos"] as const;
+
+function conversationCommandStateKey(sessionId: string, incarnation?: string): string {
+	return incarnation ? JSON.stringify([sessionId, incarnation]) : sessionId;
+}
 const emptyConversationLocalEchos: ConversationLocalEchosBySession = {};
 type ConversationDispatchOperation = "edit" | "retry" | "send";
 interface ConversationDispatchDescriptor {
@@ -390,8 +396,11 @@ export function useConversation(sessionId: string | undefined): ConversationQuer
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined) {
+export function useConversationCommands(sessionId: string | undefined, sessionIncarnation?: string) {
 	const queryClient = useQueryClient();
+	const sessionStateKey = sessionId
+		? conversationCommandStateKey(sessionId, sessionIncarnation)
+		: undefined;
 	const trackedDispatches = useQuery({
 		queryKey: conversationDispatchTrackingQueryKey,
 		queryFn: async (): Promise<ConversationDispatchTrackingBySession> => ({}),
@@ -439,7 +448,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		getLocalEchosSnapshot,
 		getLocalEchosSnapshot,
 	);
-	const trackedDispatch = sessionId ? trackedDispatches[sessionId] : undefined;
+	const trackedDispatch = sessionStateKey ? trackedDispatches[sessionStateKey] : undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
 			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(targetSessionId) });
@@ -465,9 +474,9 @@ export function useConversationCommands(sessionId: string | undefined) {
 		onMutate: (variables: ConversationSendMutationInput) => {
 			const previousEcho = queryClient
 				.getQueryData<ConversationLocalEchosBySession>(conversationLocalEchosQueryKey)
-				?.[variables.targetSessionId]
+				?.[variables.targetStateKey]
 				?.find((echo) => echo.clientMessageId === variables.clientMessageId);
-			addConversationLocalEcho(queryClient, variables.targetSessionId, {
+			addConversationLocalEcho(queryClient, variables.targetStateKey, {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				createdAt: new Date().toISOString(),
@@ -488,11 +497,11 @@ export function useConversationCommands(sessionId: string | undefined) {
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
 				(current = {}) => {
-					const tracked = current[variables.targetSessionId];
+					const tracked = current[variables.targetStateKey];
 					if (tracked && tracked.requestId !== variables.clientMessageId) return current;
 					return {
 						...current,
-						[variables.targetSessionId]: {
+						[variables.targetStateKey]: {
 							operation: "send",
 							requestId: variables.clientMessageId,
 							state: "pending",
@@ -526,7 +535,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 				const delivery: DeliveryState = data.state === "queued" ? "queued" : "accepted";
 				acceptConversationLocalEcho(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.clientMessageId,
 					acceptedTurnId,
 					delivery,
@@ -538,7 +547,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 					// further Enter presses with no error.
 					releaseConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						variables.targetStateKey,
 						variables.clientMessageId,
 					);
 				} else {
@@ -546,7 +555,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 					// turn locally visible as pending until that exact durable row arrives.
 					acceptConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						variables.targetStateKey,
 						variables.clientMessageId,
 						acceptedTurnId,
 					);
@@ -558,12 +567,12 @@ export function useConversationCommands(sessionId: string | undefined) {
 				// successful retry visibly disappear during a slow refetch.
 				releaseConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.clientMessageId,
 				);
 				updateConversationLocalEchoDelivery(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.clientMessageId,
 					"accepted",
 				);
@@ -577,7 +586,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		onError: (error, variables, context) => {
 			releaseConversationDispatch(
 				queryClient,
-				variables.targetSessionId,
+				variables.targetStateKey,
 				variables.clientMessageId,
 			);
 			if (
@@ -586,7 +595,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			) {
 				releaseConversationLocalEcho(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.clientMessageId,
 				);
 			} else {
@@ -595,7 +604,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 				// rather than making the prompt vanish and later reappear.
 				updateConversationLocalEchoDelivery(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.clientMessageId,
 					"uncertain",
 				);
@@ -894,17 +903,17 @@ export function useConversationCommands(sessionId: string | undefined) {
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+				releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+			releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 		},
 	});
 
@@ -931,17 +940,17 @@ export function useConversationCommands(sessionId: string | undefined) {
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					variables.targetStateKey,
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+				releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+			releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 		},
 	});
 
@@ -962,32 +971,32 @@ export function useConversationCommands(sessionId: string | undefined) {
 	});
 	const acknowledgeAcceptedTurn = useCallback(
 		(turnId: string) => {
-			if (!sessionId) return;
+			if (!sessionStateKey) return;
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
 				(current = {}) => {
-					const tracked = current[sessionId];
+					const tracked = current[sessionStateKey];
 					if (tracked?.state !== "accepted" || tracked.turnId !== turnId) return current;
 					const next = { ...current };
-					delete next[sessionId];
+					delete next[sessionStateKey];
 					return next;
 				},
 			);
 		},
-		[queryClient, sessionId],
+		[queryClient, sessionStateKey],
 	);
 	const acknowledgeLocalEcho = useCallback(
 		(clientMessageId: string) => {
-			if (!sessionId) return;
-			releaseConversationLocalEcho(queryClient, sessionId, clientMessageId);
+			if (!sessionStateKey) return;
+			releaseConversationLocalEcho(queryClient, sessionStateKey, clientMessageId);
 		},
-		[queryClient, sessionId],
+		[queryClient, sessionStateKey],
 	);
 	const abandonLocalEcho = acknowledgeLocalEcho;
-	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
-	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
-	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
-	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
+	const sendTargetsCurrentSession = send.variables?.targetStateKey === sessionStateKey;
+	const interruptTargetsCurrentSession = interrupt.variables?.targetStateKey === sessionStateKey;
+	const retryTargetsCurrentSession = retryTurn.variables?.targetStateKey === sessionStateKey;
+	const editTargetsCurrentSession = editMessage.variables?.targetStateKey === sessionStateKey;
 
 	return {
 		send: (input: string | ConversationSendInput) => {
@@ -996,11 +1005,12 @@ export function useConversationCommands(sessionId: string | undefined) {
 			// React cannot disable the composer until its next render. Claim the
 			// session in the shared registry synchronously so two Enter events in the
 			// same tick cannot both cross the transport boundary.
-			if (!claimConversationDispatch(queryClient, sessionId, clientMessageId, "send")) {
+			if (!sessionStateKey || !claimConversationDispatch(queryClient, sessionStateKey, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			return send.mutateAsync({
 				targetSessionId: sessionId,
+				targetStateKey: sessionStateKey,
 				clientMessageId,
 				input: typeof input === "string" ? { text: input } : input,
 			});
@@ -1008,7 +1018,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		pendingAcceptedTurnId:
 			trackedDispatch?.state === "accepted" ? trackedDispatch.turnId : undefined,
 		acknowledgeAcceptedTurn,
-		localEchos: sessionId ? localEchosBySession[sessionId] ?? [] : [],
+		localEchos: sessionStateKey ? localEchosBySession[sessionStateKey] ?? [] : [],
 		acknowledgeLocalEcho,
 		abandonLocalEcho,
 		resolve: (requestId: string, decisionId: string) => resolve.mutate({ requestId, decisionId }),
@@ -1017,7 +1027,10 @@ export function useConversationCommands(sessionId: string | undefined) {
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
+		interrupt: () => {
+			if (!sessionId || !sessionStateKey) return;
+			interrupt.mutate({ targetSessionId: sessionId, targetStateKey: sessionStateKey });
+		},
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent: resume.isPending,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
@@ -1047,13 +1060,14 @@ export function useConversationCommands(sessionId: string | undefined) {
 			retry: (turnId: string) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 				const requestId = crypto.randomUUID();
-				if (!claimConversationDispatch(queryClient, sessionId, requestId, "retry", turnId)) {
+				if (!sessionStateKey || !claimConversationDispatch(queryClient, sessionStateKey, requestId, "retry", turnId)) {
 					return Promise.reject(new Error("Conversation work is already being sent for this session."));
 				}
 				return retryTurn.mutateAsync({
 					requestId,
 					sourceTurnId: turnId,
 					targetSessionId: sessionId,
+					targetStateKey: sessionStateKey,
 				});
 			},
 			pending:
@@ -1073,7 +1087,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		editMessage: async (turnId: string, text: string, clientMessageId?: string): Promise<ChatEditOutcome> => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 			const requestId = clientMessageId ?? crypto.randomUUID();
-			if (!claimConversationDispatch(queryClient, sessionId, requestId, "edit", turnId)) {
+			if (!sessionStateKey || !claimConversationDispatch(queryClient, sessionStateKey, requestId, "edit", turnId)) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			try {
@@ -1081,6 +1095,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 				requestId,
 				sourceTurnId: turnId,
 				targetSessionId: sessionId,
+				targetStateKey: sessionStateKey,
 				text,
 			});
 			return { status: "accepted" };
