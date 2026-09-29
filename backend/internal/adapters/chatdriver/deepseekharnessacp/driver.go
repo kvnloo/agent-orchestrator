@@ -99,16 +99,30 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 	}
 }
 
-// permissionPolicy is AO's side of accept-edits and auto. DeepSeek Harness asks
-// through session/request_permission with one-shot allow/reject choices and
-// expects the client to answer, so AO answers per request rather than granting
-// anything up front. Bypass needs no entry: Harness only asks about actions its
-// own configuration has not already decided.
+// permissionPolicy maps AO's approval contract onto the choices DeepSeek
+// Harness actually offers through session/request_permission. Auto answers each
+// request once. Accept-edits answers edit-like tools only. Bypass must never
+// fall back to the human approval path: prefer a durable allow choice when the
+// agent offers one, otherwise answer this request once.
 func permissionPolicy(
 	mode ports.PermissionMode,
 	params acpsdk.RequestPermissionRequest,
 ) (acpsdk.PermissionOptionId, bool) {
 	mode = ports.NormalizePermissionMode(mode)
+	if mode == ports.PermissionModeBypassPermissions {
+		for _, option := range params.Options {
+			if option.Kind == acpsdk.PermissionOptionKindAllowAlways {
+				return option.OptionId, true
+			}
+		}
+		for _, option := range params.Options {
+			if option.Kind == acpsdk.PermissionOptionKindAllowOnce {
+				return option.OptionId, true
+			}
+		}
+		return "", false
+	}
+
 	kind := params.ToolCall.Kind
 	if mode != ports.PermissionModeAuto && (mode != ports.PermissionModeAcceptEdits || kind == nil ||
 		(*kind != acpsdk.ToolKindEdit && *kind != acpsdk.ToolKindDelete && *kind != acpsdk.ToolKindMove)) {
