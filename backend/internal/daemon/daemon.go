@@ -606,12 +606,10 @@ func Run() error {
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
 	systemInstall.SetOnSucceeded(func(target systeminstall.Target) {
-		harness, ok := installedAgentHarness(target)
-		if !ok {
-			return
+		for _, harness := range installedAgentHarnesses(target) {
+			agentSvc.InvalidateAgentInstallation(harness)
+			agentSvc.RecheckAgent(harness)
 		}
-		agentSvc.InvalidateAgentInstallation(harness)
-		agentSvc.RecheckAgent(harness)
 	})
 
 	// Connect Mobile: the bridge service needs the LAN listener, but the LAN
@@ -1122,6 +1120,24 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 		return string(target), true
 	}
 	return "", false
+}
+
+// installedAgentHarnesses returns every logical adapter whose executable may
+// have changed after this install. OpenCode 1 and 2 intentionally have distinct
+// durable harness identities but share the same default `opencode` binary;
+// installing either major replaces that path, so both readiness observations
+// and model catalogs must be invalidated together.
+func installedAgentHarnesses(target systeminstall.Target) []string {
+	harness, ok := installedAgentHarness(target)
+	if !ok {
+		return nil
+	}
+	switch target {
+	case systeminstall.TargetOpencode, systeminstall.TargetOpencodeV2:
+		return []string{string(domain.HarnessOpenCode), string(domain.HarnessOpenCodeV2)}
+	default:
+		return []string{harness}
+	}
 }
 
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
