@@ -211,7 +211,7 @@ describe("accepted conversation sends", () => {
 
 	it("does not leak accepted work into a reused session id on the same host", async () => {
 		postMock.mockResolvedValue({
-			data: { turnId: "turn-old-incarnation" },
+			data: { duplicate: false, turnId: "turn-old-incarnation" },
 			error: undefined,
 		});
 		const queryClient = new QueryClient({
