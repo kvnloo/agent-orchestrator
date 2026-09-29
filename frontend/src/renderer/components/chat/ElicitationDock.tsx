@@ -45,7 +45,7 @@ function rememberUnsavedElicitationDraft(conversationId: string, requestId: stri
 	unsavedElicitationDrafts.set(elicitationDraftKey(conversationId, requestId), draft);
 }
 
-function forgetUnsavedElicitationDraft(conversationId: string, requestId: string): void {
+export function forgetUnsavedElicitationDraft(conversationId: string, requestId: string): void {
 	unsavedElicitationDrafts.delete(elicitationDraftKey(conversationId, requestId));
 }
 
