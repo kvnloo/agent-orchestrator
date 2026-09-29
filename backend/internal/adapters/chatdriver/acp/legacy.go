@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 )
@@ -41,10 +40,6 @@ type legacyACPTransport struct {
 const (
 	// updateWindow stays well below the SDK's 1024-notification queue.
 	updateWindow = 512
-	// updateStall bounds a wait whose release was lost (for example, an update
-	// the SDK rejected before calling the handler), degrading to read-ahead
-	// rather than stalling the connection indefinitely.
-	updateStall = 2 * time.Second
 )
 
 type lockedWriteCloser struct {
@@ -121,14 +116,15 @@ func (t *legacyACPTransport) forward(source io.Reader, destination *io.PipeWrite
 }
 
 // acquireUpdate waits for room in the SDK's notification queue before
-// forwarding one session/update.
+// forwarding one session/update. The bound is strict: forwarding an untracked
+// update would let its later release consume another update's permit and
+// progressively recreate the overflow this window prevents. Connection
+// shutdown closes updatesDone, which is the liveness escape for a handler that
+// can no longer make progress.
 func (t *legacyACPTransport) acquireUpdate() {
-	timer := time.NewTimer(updateStall)
-	defer timer.Stop()
 	select {
 	case t.updates <- struct{}{}:
 	case <-t.updatesDone:
-	case <-timer.C:
 	}
 }
 
