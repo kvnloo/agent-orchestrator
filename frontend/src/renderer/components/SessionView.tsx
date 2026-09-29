@@ -480,8 +480,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		const poll = async () => {
 			try {
 				let latest: { index: number; since: string } | undefined;
+				let nextAfter = after;
 				for (;;) {
-					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
+					const page = await client.listChatEvents(orgId, sessionId, { after: nextAfter, limit: 500 }, { signal: controller.signal });
 					if (controller.signal.aborted) return;
 					for (const event of page.events) {
 						// Complete the replay before painting a stage. Old epochs can
@@ -494,9 +495,13 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 							: undefined;
 						if (index !== undefined) latest = { index, since: event.createdAt };
 					}
-					after = page.nextAfter;
+					nextAfter = page.nextAfter;
 					if (!page.hasMore) break;
 				}
+				// Cursor and painted progress are one checkpoint. If a later page
+				// failed, retry from the old cursor so milestones from earlier pages
+				// cannot be skipped without ever reaching the UI.
+				after = nextAfter;
 				if (latest) setProgress(latest);
 			} catch {
 				// Keep the current stage and retry while the session is loading.

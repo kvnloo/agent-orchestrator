@@ -1036,6 +1036,48 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("multi-step-loader-timer")).toHaveTextContent("0:05");
 	});
 
+	it("retries the whole startup replay checkpoint when a later page fails", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "requested",
+		};
+		const now = new Date().toISOString();
+		listSessionEventsMock
+			.mockResolvedValueOnce({
+				events: [{ type: "sandbox.provisioning", createdAt: now, sequence: 1 }],
+				hasMore: true,
+				nextAfter: 1,
+			})
+			.mockRejectedValueOnce(new Error("page 2 unavailable"))
+			.mockResolvedValueOnce({
+				events: [{ type: "sandbox.provisioning", createdAt: now, sequence: 1 }],
+				hasMore: true,
+				nextAfter: 1,
+			})
+			.mockResolvedValueOnce({
+				events: [{ type: "worker.ready", createdAt: now, sequence: 2 }],
+				hasMore: false,
+				nextAfter: 2,
+			});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		await waitFor(
+			() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"),
+			{ timeout: 4_000 },
+		);
+		expect(listSessionEventsMock.mock.calls.slice(0, 4).map((call) => call[2])).toEqual([
+			{ after: 0, limit: 500 },
+			{ after: 1, limit: 500 },
+			{ after: 0, limit: 500 },
+			{ after: 1, limit: 500 },
+		]);
+	});
+
 	it("advances the active phrase when a later startup event arrives", async () => {
 		const session = workerSession("sess-2");
 		session.runtimeConnected = false;
