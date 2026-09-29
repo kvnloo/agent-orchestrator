@@ -547,7 +547,7 @@ export function useConversationCommands(sessionId: string | undefined, sessionIn
 					// further Enter presses with no error.
 					releaseConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						variables.targetStateKey,
 						variables.clientMessageId,
 					);
 				} else {
@@ -555,7 +555,7 @@ export function useConversationCommands(sessionId: string | undefined, sessionIn
 					// turn locally visible as pending until that exact durable row arrives.
 					acceptConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						variables.targetStateKey,
 						variables.clientMessageId,
 						acceptedTurnId,
 					);
