@@ -413,9 +413,13 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			})
 			if resumeErr != nil {
 				conv.discard()
+				// session/load already proved transcript replay is unavailable, but a
+				// failed fallback session/resume does not prove the provider context
+				// is gone. Keep the ordinary startup path retryable; typed auth errors
+				// from normalizeACPError still remain actionable immediately.
 				return nil, errors.Join(
-					fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, loadErr),
-					fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, normalizeACPError("ACP session/resume", resumeErr)),
+					fmt.Errorf("%w: %w", ports.ErrChatRecoveryInconclusive, loadErr),
+					normalizeACPError("ACP session/resume", resumeErr),
 				)
 			}
 			configOptions = resumed.ConfigOptions
