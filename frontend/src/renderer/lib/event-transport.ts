@@ -354,6 +354,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 			};
 
+			const onVisibilityChange = () => {
+				if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+				// Chromium may throttle timers while the app is backgrounded. If a CDC
+				// frame is delayed or missed during that window, returning to the app is
+				// an authoritative opportunity to catch up immediately instead of waiting
+				// for the next 15-second workspace poll. Reuse the reconnect path so open
+				// conversations and other event-derived caches recover with it.
+				refreshWorkspaces();
+			};
+			if (typeof document !== "undefined") {
+				document.addEventListener("visibilitychange", onVisibilityChange);
+			}
 			const removeDaemonListener = aoBridge.daemon.onStatus(() => {
 				connectSource();
 				refreshWorkspaces();
@@ -372,6 +384,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
 				if (retryTimer) clearTimeout(retryTimer);
+				if (typeof document !== "undefined") {
+					document.removeEventListener("visibilitychange", onVisibilityChange);
+				}
 				removeDaemonListener();
 				removeBaseUrlListener();
 				source?.close();
