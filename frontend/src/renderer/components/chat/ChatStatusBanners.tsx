@@ -22,19 +22,25 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 const mcpNoticeShownSessions = new Set<string>();
 const MCP_NOTICE_STORAGE_PREFIX = "ao:mcp-notice-shown:";
 
-function mcpNoticeWasShown(sessionId: string): boolean {
-	if (mcpNoticeShownSessions.has(sessionId)) return true;
+function mcpNoticeScopeKey(sessionId: string, incarnation?: string): string {
+	return incarnation ? JSON.stringify([sessionId, incarnation]) : sessionId;
+}
+
+function mcpNoticeWasShown(sessionId: string, incarnation?: string): boolean {
+	const scopeKey = mcpNoticeScopeKey(sessionId, incarnation);
+	if (mcpNoticeShownSessions.has(scopeKey)) return true;
 	try {
-		return window.localStorage.getItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`) === "1";
+		return window.localStorage.getItem(`${MCP_NOTICE_STORAGE_PREFIX}${scopeKey}`) === "1";
 	} catch {
 		return false;
 	}
 }
 
-function rememberMcpNotice(sessionId: string): void {
-	mcpNoticeShownSessions.add(sessionId);
+function rememberMcpNotice(sessionId: string, incarnation?: string): void {
+	const scopeKey = mcpNoticeScopeKey(sessionId, incarnation);
+	mcpNoticeShownSessions.add(scopeKey);
 	try {
-		window.localStorage.setItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`, "1");
+		window.localStorage.setItem(`${MCP_NOTICE_STORAGE_PREFIX}${scopeKey}`, "1");
 	} catch {
 		// Persistence is best-effort; the renderer-lifetime set still prevents remount replays.
 	}
@@ -180,11 +186,14 @@ export const McpServerBanner = memo(function McpServerBanner({
 	servers,
 	placement = "above",
 	sessionId,
+	sessionIncarnation,
 }: {
 	/** Only the broken ones. The caller filters, so an empty list means nothing to say. */
 	servers: McpServer[];
 	placement?: "above" | "below";
 	sessionId?: string;
+	/** Immutable daemon incarnation; prevents a reused logical id inheriting this acknowledgement. */
+	sessionIncarnation?: string;
 }) {
 	const fingerprint = servers
 		.map((server) => `${server.name}:${server.status}:${server.failureReason ?? ""}:${server.error ?? ""}`)
@@ -198,12 +207,12 @@ export const McpServerBanner = memo(function McpServerBanner({
 
 	useEffect(() => {
 		if (!fingerprint) return;
-		if (sessionId && mcpNoticeWasShown(sessionId)) return;
-		if (sessionId) rememberMcpNotice(sessionId);
+		if (sessionId && mcpNoticeWasShown(sessionId, sessionIncarnation)) return;
+		if (sessionId) rememberMcpNotice(sessionId, sessionIncarnation);
 		setShownFingerprint((current) => current ?? fingerprint);
 		const timeout = window.setTimeout(() => setDismissingFingerprint(fingerprint), 3_000);
 		return () => window.clearTimeout(timeout);
-	}, [fingerprint, sessionId]);
+	}, [fingerprint, sessionId, sessionIncarnation]);
 
 	useEffect(() => {
 		if (dismissingFingerprint !== fingerprint) return;
