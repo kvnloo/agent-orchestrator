@@ -69,12 +69,14 @@ export interface ConversationSendInput {
 
 interface ConversationSendMutationInput {
 	targetSessionId: string;
+	targetStateKey: string;
 	clientMessageId: string;
 	input: ConversationSendInput;
 }
 
 interface ConversationSessionMutationInput {
 	targetSessionId: string;
+	targetStateKey: string;
 }
 
 interface ConversationRetryMutationInput extends ConversationSessionMutationInput {
@@ -102,6 +104,15 @@ export function conversationConfigOptionsQueryKey(sessionId: string, hostId?: st
 
 const conversationDispatchTrackingQueryKey = ["conversation-dispatch-tracking"] as const;
 const conversationLocalEchosQueryKey = ["conversation-local-echos"] as const;
+
+function conversationCommandStateKey(
+	sessionId: string,
+	hostId?: string,
+	incarnation?: string,
+): string {
+	const hostSession = sessionUiKey(sessionId, hostId);
+	return incarnation ? JSON.stringify([hostSession, incarnation]) : hostSession;
+}
 type ConversationDispatchOperation = "edit" | "retry" | "send";
 interface ConversationDispatchDescriptor {
 	operation: ConversationDispatchOperation;
@@ -401,10 +412,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string) {
+export function useConversationCommands(
+	sessionId: string | undefined,
+	hostId?: string,
+	sessionIncarnation?: string,
+) {
 	const queryClient = useQueryClient();
-	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
-	const stateKey = (targetSessionId: string) => sessionUiKey(targetSessionId, hostId);
+	const stateSessionId = sessionId
+		? conversationCommandStateKey(sessionId, hostId, sessionIncarnation)
+		: undefined;
 	const trackedDispatches = useQuery({
 		queryKey: conversationDispatchTrackingQueryKey,
 		queryFn: async (): Promise<ConversationDispatchTrackingBySession> => ({}),
@@ -456,7 +472,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
-			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
+			addConversationLocalEcho(queryClient, variables.targetStateKey, {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				createdAt: new Date().toISOString(),
@@ -464,11 +480,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
 				(current = {}) => {
-					const tracked = current[stateKey(variables.targetSessionId)];
+					const tracked = current[variables.targetStateKey];
 					if (tracked && tracked.requestId !== variables.clientMessageId) return current;
 					return {
 						...current,
-						[stateKey(variables.targetSessionId)]: {
+						[variables.targetStateKey]: {
 							operation: "send",
 							requestId: variables.clientMessageId,
 							state: "pending",
@@ -500,7 +516,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (acceptedTurnId) {
 				acceptConversationLocalEcho(
 					queryClient,
-					stateKey(variables.targetSessionId),
+					variables.targetStateKey,
 					variables.clientMessageId,
 					acceptedTurnId,
 				);
@@ -511,7 +527,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					// further Enter presses with no error.
 					releaseConversationDispatch(
 						queryClient,
-						stateKey(variables.targetSessionId),
+						variables.targetStateKey,
 						variables.clientMessageId,
 					);
 				} else {
@@ -519,7 +535,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					// turn locally visible as pending until that exact durable row arrives.
 					acceptConversationDispatch(
 						queryClient,
-						stateKey(variables.targetSessionId),
+						variables.targetStateKey,
 						variables.clientMessageId,
 						acceptedTurnId,
 					);
@@ -530,12 +546,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				// renderer can wait to observe. Release only this request's sentinel.
 				releaseConversationDispatch(
 					queryClient,
-					stateKey(variables.targetSessionId),
+					variables.targetStateKey,
 					variables.clientMessageId,
 				);
 				releaseConversationLocalEcho(
 					queryClient,
-					stateKey(variables.targetSessionId),
+					variables.targetStateKey,
 					variables.clientMessageId,
 				);
 			}
@@ -548,12 +564,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onError: (_error, variables) => {
 			releaseConversationDispatch(
 				queryClient,
-				stateKey(variables.targetSessionId),
+				variables.targetStateKey,
 				variables.clientMessageId,
 			);
 			releaseConversationLocalEcho(
 				queryClient,
-				stateKey(variables.targetSessionId),
+				variables.targetStateKey,
 				variables.clientMessageId,
 			);
 		},
@@ -866,17 +882,17 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					stateKey(variables.targetSessionId),
+					variables.targetStateKey,
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
+				releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
+			releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 		},
 	});
 
@@ -903,17 +919,17 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					stateKey(variables.targetSessionId),
+					variables.targetStateKey,
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
+				releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
+			releaseConversationDispatch(queryClient, variables.targetStateKey, variables.requestId);
 		},
 	});
 
@@ -955,10 +971,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		[queryClient, sessionId, stateSessionId],
 	);
-	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
-	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
-	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
-	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
+	const sendTargetsCurrentSession = send.variables?.targetStateKey === stateSessionId;
+	const interruptTargetsCurrentSession = interrupt.variables?.targetStateKey === stateSessionId;
+	const retryTargetsCurrentSession = retryTurn.variables?.targetStateKey === stateSessionId;
+	const editTargetsCurrentSession = editMessage.variables?.targetStateKey === stateSessionId;
 
 	return {
 		send: (input: string | ConversationSendInput) => {
@@ -972,6 +988,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			}
 			return send.mutateAsync({
 				targetSessionId: sessionId,
+				targetStateKey: stateSessionId as string,
 				clientMessageId,
 				input: typeof input === "string" ? { text: input } : input,
 			});
@@ -987,7 +1004,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
+		interrupt: () => {
+			if (!sessionId || !stateSessionId) return;
+			interrupt.mutate({ targetSessionId: sessionId, targetStateKey: stateSessionId });
+		},
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent: resume.isPending,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
@@ -1023,6 +1043,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					requestId,
 					sourceTurnId: turnId,
 					targetSessionId: sessionId,
+					targetStateKey: stateSessionId as string,
 				});
 			},
 			pending:
@@ -1050,6 +1071,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				requestId,
 				sourceTurnId: turnId,
 				targetSessionId: sessionId,
+				targetStateKey: stateSessionId as string,
 				text,
 			});
 			return { status: "accepted" };
