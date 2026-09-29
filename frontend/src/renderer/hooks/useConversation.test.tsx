@@ -221,7 +221,7 @@ describe("accepted conversation sends", () => {
 			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 		);
 		const { result, rerender } = renderHook(
-			({ incarnation }) => useConversationCommands("same-session", "box-a", incarnation),
+			({ incarnation }) => useConversationCommands("same-session", undefined, incarnation),
 			{ initialProps: { incarnation: "created-old" }, wrapper: HookWrapper },
 		);
 
