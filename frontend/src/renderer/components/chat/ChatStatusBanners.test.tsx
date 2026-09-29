@@ -153,6 +153,31 @@ describe("McpServerBanner", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
+	it("shows the notice again for a replacement session with the same logical id", () => {
+		const first = render(
+			<TooltipProvider>
+				<McpServerBanner
+					servers={broken}
+					sessionId="reused-session"
+					sessionIncarnation="created-old"
+				/>
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright MCP unavailable");
+		first.unmount();
+
+		render(
+			<TooltipProvider>
+				<McpServerBanner
+					servers={broken}
+					sessionId="reused-session"
+					sessionIncarnation="created-new"
+				/>
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright MCP unavailable");
+	});
+
 	// A healthy server is not news. The caller filters, and an empty list must not
 	// leave a permanent bar above the conversation saying nothing is wrong.
 	it("says nothing when no server is broken", () => {
