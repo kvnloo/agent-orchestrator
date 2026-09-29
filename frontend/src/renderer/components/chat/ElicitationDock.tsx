@@ -80,6 +80,8 @@ export function ElicitationDock({
 	sessionId,
 	conversationId,
 	onResolve,
+	resolveError,
+	onResolveError,
 }: {
 	activity: ConversationActivity;
 	/**
@@ -101,6 +103,9 @@ export function ElicitationDock({
 		action: InputAction,
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
+	/** Parent-retained failure for this request, surviving keyed dock replacement. */
+	resolveError?: string;
+	onResolveError?: (requestId: string, error?: string) => void;
 }) {
 	const requestId = activity.requestId;
 	const unavailable = !requestId || !onResolve;
@@ -111,6 +116,7 @@ export function ElicitationDock({
 		if (!requestId || !onResolve || submitting) return;
 		setSubmitting(true);
 		setError(undefined);
+		onResolveError?.(requestId, undefined);
 		try {
 			await onResolve(requestId, action, content);
 			if (conversationId) {
@@ -118,13 +124,16 @@ export function ElicitationDock({
 				forgetUnsavedElicitationDraft(conversationId, requestId);
 			}
 			if (sessionId) setChatDraftBoundary(sessionId, elicitationBoundarySource(requestId), undefined);
+			onResolveError?.(requestId, undefined);
 			// Leave the form disabled on success rather than resetting `submitting`
 			// here: `onResolve`'s conversation refetch is fire-and-forget, so this
 			// question can still be on screen for a beat after it resolves. A
 			// re-enabled form invites a stray edit that would recreate the draft
 			// just cleared above.
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : "The answer could not be sent.");
+			const message = reason instanceof Error ? reason.message : "The answer could not be sent.";
+			setError(message);
+			onResolveError?.(requestId, message);
 			setSubmitting(false);
 		}
 	}
@@ -154,9 +163,9 @@ export function ElicitationDock({
 				/>
 			)}
 
-			{error ? (
+			{resolveError ?? error ? (
 				<p role="alert" className="px-3 pb-2 text-[11px] leading-snug text-destructive">
-					{error}
+					{resolveError ?? error}
 				</p>
 			) : null}
 		</div>
