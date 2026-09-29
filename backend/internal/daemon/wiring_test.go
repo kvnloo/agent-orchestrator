@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +91,26 @@ func TestInstalledAgentHarnessMapsManagedHarnessInstalls(t *testing.T) {
 		if got != test.harness || ok != test.ok {
 			t.Errorf("installedAgentHarness(%q) = (%q, %v), want (%q, %v)", test.target, got, ok, test.harness, test.ok)
 		}
+	}
+}
+
+func TestInstalledAgentHarnessesIncludesSharedOpenCodeBinaryOwners(t *testing.T) {
+	for _, target := range []systeminstall.Target{
+		systeminstall.TargetOpencode,
+		systeminstall.TargetOpencodeV2,
+	} {
+		got := installedAgentHarnesses(target)
+		want := []string{string(domain.HarnessOpenCode), string(domain.HarnessOpenCodeV2)}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("installedAgentHarnesses(%q) = %v, want %v", target, got, want)
+		}
+	}
+
+	if got := installedAgentHarnesses(systeminstall.TargetCodex); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("installedAgentHarnesses(codex) = %v, want [codex]", got)
+	}
+	if got := installedAgentHarnesses(systeminstall.TargetTmux); got != nil {
+		t.Fatalf("installedAgentHarnesses(tmux) = %v, want nil", got)
 	}
 }
 
