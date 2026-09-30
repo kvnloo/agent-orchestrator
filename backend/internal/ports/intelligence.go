@@ -2,6 +2,7 @@ package ports
 
 import "context"
 
+// SpawnDecisionSchema is the versioned AO-to-intelligence spawn opportunity contract.
 const SpawnDecisionSchema = "ao.z0int.spawn.v1"
 
 // SpawnDecisionCurrent is AO's already-resolved choice. Intelligence may
