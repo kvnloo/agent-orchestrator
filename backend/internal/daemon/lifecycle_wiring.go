@@ -4,13 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
+	z0intelligence "github.com/aoagents/agent-orchestrator/backend/internal/adapters/intelligence/z0intelligence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
@@ -214,6 +218,17 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Scratch:  scratchWS,
 		Projects: store,
 	})
+	// Experimental and off by default. The client refuses non-loopback hosts so
+	// private task text cannot be redirected to an arbitrary network service.
+	var intelligence ports.IntelligenceAdvisor
+	if raw := strings.TrimSpace(os.Getenv("AO_Z0INTELLIGENCE_SHADOW_URL")); raw != "" {
+		client, clientErr := z0intelligence.New(raw, 250*time.Millisecond)
+		if clientErr != nil {
+			return nil, nil, nil, fmt.Errorf("z0intelligence shadow client: %w", clientErr)
+		}
+		intelligence = client
+		log.Info("z0intelligence shadow bridge enabled", "url", raw)
+	}
 	mgr := sessionmanager.New(sessionmanager.Deps{
 		Runtime:             runtime,
 		Agents:              agents,
@@ -226,6 +241,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Preview:             previewLifecycle,
 		Browser:             browserLifecycle,
 		BrowserCapabilities: browserCapabilities,
+		Intelligence:        intelligence,
 		DataDir:             cfg.DataDir,
 		RunFilePath:         cfg.RunFilePath,
 		BackgroundContext:   ctx,
