@@ -17,6 +17,7 @@ import (
 
 const spawnDecisionPath = "/v1/integrations/agent-orchestrator/spawn-decision"
 
+// Client is the loopback-only HTTP adapter for the z0intelligence policy plane.
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -51,6 +52,7 @@ func New(rawURL string, timeout time.Duration) (*Client, error) {
 	}, nil
 }
 
+// AdviseSpawn records and retrieves non-authoritative shadow advice for one spawn.
 func (c *Client) AdviseSpawn(ctx context.Context, in ports.SpawnDecisionRequest) (ports.SpawnDecision, error) {
 	body, err := json.Marshal(in)
 	if err != nil {
@@ -65,7 +67,7 @@ func (c *Client) AdviseSpawn(ctx context.Context, in ports.SpawnDecisionRequest)
 	if err != nil {
 		return ports.SpawnDecision{}, fmt.Errorf("z0intelligence spawn decision: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return ports.SpawnDecision{}, fmt.Errorf("z0intelligence spawn decision: HTTP %d", resp.StatusCode)
