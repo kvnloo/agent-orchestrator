@@ -3,6 +3,9 @@ package usage
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -10,11 +13,16 @@ const defaultWatcherRestartDelay = 30 * time.Second
 
 type watcherFactory func(context.Context, []string) (transcriptWatcher, error)
 
+type watcherRootUpdater interface {
+	SetRoots(context.Context, []string) error
+}
+
 // Pipeline supervises the event-driven transcript watcher and coordinator.
 // Durable cursors remain in SQLite, so recreating either component is safe.
 type Pipeline struct {
 	store       coordinatorStore
 	ingestor    sourceIngestor
+	rootsMu     sync.RWMutex
 	roots       []string
 	cfg         CoordinatorConfig
 	logger      *slog.Logger
@@ -22,6 +30,7 @@ type Pipeline struct {
 	restartWait time.Duration
 	reconcile   chan struct{}
 	inventory   chan struct{}
+	rootsChanged chan struct{}
 }
 
 // NewPipeline constructs a supervised usage collection pipeline.
@@ -45,8 +54,9 @@ func NewPipeline(
 			return NewTranscriptWatcher(ctx, roots)
 		},
 		restartWait: defaultWatcherRestartDelay,
-		reconcile:   make(chan struct{}, 1),
-		inventory:   make(chan struct{}, 1),
+		reconcile:    make(chan struct{}, 1),
+		inventory:    make(chan struct{}, 1),
+		rootsChanged: make(chan struct{}, 1),
 	}
 }
 
@@ -67,6 +77,36 @@ func (p *Pipeline) NotifyInventoryChanged() {
 	}
 }
 
+// AddWatchRoot adds one provider-authorized transcript root to the pipeline.
+// Updates are coalesced; the durable root snapshot retains every unique root so
+// a dropped signal cannot lose trust state and watcher restarts inherit it.
+func (p *Pipeline) AddWatchRoot(root string) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return
+	}
+	root = filepath.Clean(root)
+	p.rootsMu.Lock()
+	for _, existing := range p.roots {
+		if filepath.Clean(existing) == root {
+			p.rootsMu.Unlock()
+			return
+		}
+	}
+	p.roots = append(p.roots, root)
+	p.rootsMu.Unlock()
+	select {
+	case p.rootsChanged <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Pipeline) watchRoots() []string {
+	p.rootsMu.RLock()
+	defer p.rootsMu.RUnlock()
+	return append([]string(nil), p.roots...)
+}
+
 // Start runs until ctx is canceled, recreating a failed watcher after a bounded
 // delay. The returned channel closes after the active coordinator has stopped.
 func (p *Pipeline) Start(ctx context.Context) <-chan struct{} {
@@ -80,7 +120,7 @@ func (p *Pipeline) Start(ctx context.Context) <-chan struct{} {
 
 func (p *Pipeline) run(ctx context.Context) {
 	for {
-		watcher, err := p.newWatcher(ctx, p.roots)
+		watcher, err := p.newWatcher(ctx, p.watchRoots())
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -118,6 +158,19 @@ func (p *Pipeline) runCoordinator(ctx context.Context, watcher transcriptWatcher
 		case <-p.reconcile:
 			coordinator.NotifySourcesChanged()
 		case <-p.inventory:
+			coordinator.NotifyInventoryChanged()
+		case <-p.rootsChanged:
+			if updater, ok := watcher.(watcherRootUpdater); ok {
+				if err := updater.SetRoots(coordinatorCtx, p.watchRoots()); err != nil {
+					if coordinatorCtx.Err() == nil {
+						p.logger.Warn("update usage transcript roots failed", "err", err)
+					}
+					continue
+				}
+			}
+			// A source may have been excluded from the previous rebuild because
+			// its trusted provider root had not been added yet. Replay inventory
+			// after the allowlist update so that exact source becomes watchable.
 			coordinator.NotifyInventoryChanged()
 		}
 	}
