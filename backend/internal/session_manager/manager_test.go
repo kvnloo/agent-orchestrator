@@ -3360,6 +3360,38 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 	requireNoPromptDir(t, dataDir, "mer-1")
 }
 
+func TestRetireForReplacementCleanupFailureSettlesDeadPredecessor(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Kind = domain.KindOrchestrator
+	rec.Metadata.WorkspacePath = workspace
+	rec.Metadata.Branch = "ao/mer-orch"
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	project.Path = t.TempDir()
+	project.Config.PreRemove = []string{"exit 7"}
+	st.projects["mer"] = project
+
+	err := m.RetireForReplacement(ctx, rec.ID)
+	if !errors.Is(err, ErrCleanupScript) {
+		t.Fatalf("retire err = %v, want ErrCleanupScript", err)
+	}
+	if rt.destroyed != 1 {
+		t.Fatalf("runtime destroyed = %d, want 1", rt.destroyed)
+	}
+	if ws.destroyed != 0 {
+		t.Fatalf("workspace destroyed = %d, want 0", ws.destroyed)
+	}
+	if !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("dead predecessor remained live after cleanup failure: %+v", st.sessions[rec.ID])
+	}
+}
+
 func TestKillCleanupScriptFailurePreservesWorkspaceForRetry(t *testing.T) {
 	m, st, rt, ws := newManager()
 	m.dataDir = t.TempDir()
