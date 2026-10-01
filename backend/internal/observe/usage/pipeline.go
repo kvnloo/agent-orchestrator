@@ -20,16 +20,16 @@ type watcherRootUpdater interface {
 // Pipeline supervises the event-driven transcript watcher and coordinator.
 // Durable cursors remain in SQLite, so recreating either component is safe.
 type Pipeline struct {
-	store       coordinatorStore
-	ingestor    sourceIngestor
-	rootsMu     sync.RWMutex
-	roots       []string
-	cfg         CoordinatorConfig
-	logger      *slog.Logger
-	newWatcher  watcherFactory
-	restartWait time.Duration
-	reconcile   chan struct{}
-	inventory   chan struct{}
+	store        coordinatorStore
+	ingestor     sourceIngestor
+	rootsMu      sync.RWMutex
+	roots        []string
+	cfg          CoordinatorConfig
+	logger       *slog.Logger
+	newWatcher   watcherFactory
+	restartWait  time.Duration
+	reconcile    chan struct{}
+	inventory    chan struct{}
 	rootsChanged chan struct{}
 }
 
