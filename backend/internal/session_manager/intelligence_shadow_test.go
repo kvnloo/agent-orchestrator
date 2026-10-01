@@ -117,12 +117,18 @@ func TestObserveTerminalOutcomeJoinsLifecycleAndSCMEvidence(t *testing.T) {
 		got.OutcomeID != "ao-outcome-proj-7-terminated" || got.SessionID != "proj-7" {
 		t.Fatalf("identity = %+v", got)
 	}
-	if !got.Terminated || !got.SCMComplete || got.Harness != "codex" || got.Model != "gpt-5" || got.Mode != "tui" {
-		t.Fatalf("lifecycle = %+v", got)
+	if got.Outcome.ExecutionCompleted == nil || !*got.Outcome.ExecutionCompleted ||
+		got.Outcome.PRMerged == nil || !*got.Outcome.PRMerged ||
+		got.Outcome.VerificationSource != "ao-pr-merge" {
+		t.Fatalf("outcome = %+v", got.Outcome)
 	}
-	if len(got.PRs) != 1 || !got.PRs[0].Merged || got.PRs[0].CI != "passing" ||
-		got.PRs[0].Review != "approved" || !got.PRs[0].ExternalApproved {
-		t.Fatalf("prs = %+v", got.PRs)
+	if !got.Evidence.Terminated || !got.Evidence.SCMComplete || got.Evidence.Harness != "codex" ||
+		got.Evidence.Model != "gpt-5" || got.Evidence.Mode != "tui" {
+		t.Fatalf("lifecycle = %+v", got.Evidence)
+	}
+	if len(got.Evidence.PRs) != 1 || !got.Evidence.PRs[0].Merged || got.Evidence.PRs[0].CI != "passing" ||
+		got.Evidence.PRs[0].Review != "approved" || !got.Evidence.PRs[0].ExternalApproved {
+		t.Fatalf("prs = %+v", got.Evidence.PRs)
 	}
 }
 
