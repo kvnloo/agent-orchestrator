@@ -8704,6 +8704,58 @@ func TestRestoreAll_RestoresBothWorkerAndOrchestrator(t *testing.T) {
 	}
 }
 
+func TestRestoreAllRetriesSetupAfterFailedRecreation(t *testing.T) {
+	m, st, rt, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	cfg := testRoleAgents()
+	cfg.PostCreate = []string{"exit 7"}
+	st.projects["scratch"] = domain.ProjectRecord{
+		ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: cfg,
+	}
+	rec := domain.SessionRecord{
+		ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker,
+		Harness: domain.HarnessClaudeCode, IsTerminated: true,
+		CreatedAt: time.Unix(300, 0).UTC(),
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace, Prompt: "continue"},
+		Activity: domain.Activity{State: domain.ActivityExited},
+	}
+	st.sessions[rec.ID] = rec
+	st.worktrees[rec.ID] = []domain.SessionWorktreeRecord{{
+		SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName,
+		WorktreePath: workspace, State: "removed",
+	}}
+
+	if err := m.RestoreAll(ctx); err != nil {
+		t.Fatalf("first RestoreAll: %v", err)
+	}
+	if !st.sessions[rec.ID].IsTerminated || rt.created != 0 {
+		t.Fatalf("failed setup must not relaunch: session=%+v runtime=%d", st.sessions[rec.ID], rt.created)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("recreated workspace missing after failed setup: %v", err)
+	}
+
+	project := st.projects["scratch"]
+	project.Config.PostCreate = []string{"echo setup > setup-ok"}
+	st.projects["scratch"] = project
+	if err := m.RestoreAll(ctx); err != nil {
+		t.Fatalf("retry RestoreAll: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "setup-ok")); err != nil {
+		t.Fatalf("RestoreAll retry skipped pending setup: %v", err)
+	}
+	if rt.created != 1 || st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("successful retry did not relaunch exactly once: runtime=%d session=%+v", rt.created, st.sessions[rec.ID])
+	}
+}
+
 func TestRestoreAllCarriesConfiguredAndRecordedBaseToWorkspaceRestore(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	project := st.projects["mer"]
