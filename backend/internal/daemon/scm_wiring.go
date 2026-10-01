@@ -40,7 +40,12 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 		return closedDone()
 	}
 	provider := scmmulti.New(named...)
-	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider})
+	evidenceSink := newSCMIntelligenceSink(store, logger)
+	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{
+		Logger:                 logger,
+		ScopedIdentityResolver: provider,
+		EvidenceSink:           evidenceSink,
+	})
 	return observer.Start(ctx)
 }
 
