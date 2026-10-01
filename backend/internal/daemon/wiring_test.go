@@ -857,6 +857,93 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 	}
 }
 
+func TestWiring_MergeConflictReArmsWhenProviderCleanButReviewBlocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(cancel)
+
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "p",
+		Kind:      domain.KindWorker,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prURL = "https://github.com/o/r/pull/1"
+	writePR := func(pr domain.PullRequest) {
+		t.Helper()
+		pr.URL = prURL
+		pr.SessionID = rec.ID
+		pr.Number = 1
+		pr.UpdatedAt = time.Now()
+		if err := store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatalf("persist PR: %v", err)
+		}
+	}
+	writePR(domain.PullRequest{
+		Mergeability:             domain.MergeConflicting,
+		ProviderMergeable:        "CONFLICTING",
+		ProviderMergeStateStatus: "DIRTY",
+	})
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	messenger := &captureMessenger{}
+	stack := startLifecycle(ctx, t.TempDir(), store, tmux.New(tmux.Options{}), messenger, nil, nil, nil, log)
+	t.Cleanup(stack.Stop)
+
+	apply := func(state domain.Mergeability) {
+		t.Helper()
+		if err := stack.LCM.ApplySCMObservation(ctx, rec.ID, ports.SCMObservation{
+			Fetched: true,
+			PR: ports.SCMPRObservation{URL: prURL, Number: 1},
+			Mergeability: ports.SCMMergeabilityObservation{
+				State: string(state), Conflict: state == domain.MergeConflicting,
+			},
+		}); err != nil {
+			t.Fatalf("ApplySCMObservation(%s): %v", state, err)
+		}
+	}
+
+	apply(domain.MergeConflicting)
+	if len(messenger.msgs) != 1 {
+		t.Fatalf("first conflict should nudge once, got %v", messenger.msgs)
+	}
+
+	// GitHub can report the branch itself MERGEABLE while mergeStateStatus is
+	// BLOCKED solely because a required review is still pending. AO's composite
+	// verdict remains blocked, but the raw provider fact proves the old conflict
+	// has cleared and therefore must re-arm the conflict dedup key.
+	writePR(domain.PullRequest{
+		Mergeability:             domain.MergeBlocked,
+		Review:                   domain.ReviewRequired,
+		ProviderMergeable:        "MERGEABLE",
+		ProviderMergeStateStatus: "BLOCKED",
+	})
+	apply(domain.MergeBlocked)
+
+	writePR(domain.PullRequest{
+		Mergeability:             domain.MergeConflicting,
+		Review:                   domain.ReviewRequired,
+		ProviderMergeable:        "CONFLICTING",
+		ProviderMergeStateStatus: "DIRTY",
+	})
+	apply(domain.MergeConflicting)
+	if len(messenger.msgs) != 2 {
+		t.Fatalf("conflict returning after clean-but-review-blocked state should nudge again, got %d: %v", len(messenger.msgs), messenger.msgs)
+	}
+	if !strings.Contains(messenger.msgs[1].msg, "merge conflicts") {
+		t.Fatalf("second nudge is not the merge-conflict nudge: %+v", messenger.msgs[1])
+	}
+}
+
 // TestProjectRepoResolver_ResolvesRegisteredProject asserts the DB-backed repo
 // resolver turns a registered project into its on-disk repo path (so spawns
 // materialise a worktree), and fails loudly for an unregistered project.
