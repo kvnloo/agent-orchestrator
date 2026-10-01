@@ -158,6 +158,7 @@ type claimPRResponse struct {
 type sessionListEntry struct {
 	ID             string          `json:"id"`
 	ProjectID      string          `json:"projectId"`
+	DisplayName    string          `json:"displayName,omitempty"`
 	Role           string          `json:"role"`
 	Status         string          `json:"status,omitempty"`
 	Activity       string          `json:"activity,omitempty"`
@@ -844,6 +845,7 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 		entries = append(entries, sessionListEntry{
 			ID:             sess.ID,
 			ProjectID:      sess.ProjectID,
+			DisplayName:    sess.DisplayName,
 			Role:           sessionRole(sess),
 			Status:         sess.Status,
 			Activity:       sess.Activity.State,
