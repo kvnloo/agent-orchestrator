@@ -3,7 +3,10 @@ package ports
 import "context"
 
 // SpawnDecisionSchema is the versioned AO-to-intelligence spawn opportunity contract.
-const SpawnDecisionSchema = "ao.z0int.spawn.v1"
+const (
+	SpawnDecisionSchema = "ao.z0int.spawn.v1"
+	SpawnOutcomeSchema  = "ao.z0int.outcome.v1"
+)
 
 // SpawnDecisionCurrent is AO's already-resolved choice. Intelligence may
 // inspect it, but shadow mode never mutates it.
@@ -51,9 +54,49 @@ type SpawnDecision struct {
 	Replayed              bool                 `json:"replayed"`
 }
 
+// SpawnOutcomePR is the bounded SCM evidence attached to a terminal outcome.
+// It deliberately excludes review bodies, check logs, credentials, and other
+// high-cardinality/private provider payloads.
+type SpawnOutcomePR struct {
+	URL                      string `json:"url"`
+	Number                   int    `json:"number"`
+	Draft                    bool   `json:"draft"`
+	Merged                   bool   `json:"merged"`
+	Closed                   bool   `json:"closed"`
+	CI                       string `json:"ci"`
+	Review                   string `json:"review"`
+	Mergeability             string `json:"mergeability"`
+	ReviewComments           bool   `json:"review_comments"`
+	ExternalApproved         bool   `json:"external_approved"`
+	ExternalChangesRequested bool   `json:"external_changes_requested"`
+	ExternalComments         bool   `json:"external_comments"`
+	HeadSHA                  string `json:"head_sha,omitempty"`
+}
+
+// SpawnOutcomeRequest joins AO's durable terminal/lifecycle facts back to the
+// spawn opportunity through the same stable trace id. OutcomeID is deterministic
+// so a receiver can make replay idempotent without AO persisting sidecar state.
+type SpawnOutcomeRequest struct {
+	Schema      string           `json:"schema"`
+	TraceID     string           `json:"trace_id"`
+	OutcomeID   string           `json:"outcome_id"`
+	SessionID   string           `json:"session_id"`
+	ProjectID   string           `json:"project_id"`
+	Kind        string           `json:"kind"`
+	Harness     string           `json:"harness"`
+	Mode        string           `json:"mode"`
+	Model       string           `json:"model,omitempty"`
+	Activity    string           `json:"activity"`
+	Terminated  bool             `json:"terminated"`
+	SCMComplete bool             `json:"scm_complete"`
+	PRs         []SpawnOutcomePR `json:"prs"`
+}
+
 // IntelligenceAdvisor is deliberately orthogonal to AgentResolver. An
-// intelligence plane may recommend policy, but it is not an agent harness and
-// cannot own AO session lifecycle.
+// intelligence plane may recommend policy and receive bounded evidence, but it
+// is not an agent harness and cannot own AO session lifecycle or canonical SCM
+// state.
 type IntelligenceAdvisor interface {
 	AdviseSpawn(context.Context, SpawnDecisionRequest) (SpawnDecision, error)
+	ObserveOutcome(context.Context, SpawnOutcomeRequest) error
 }
