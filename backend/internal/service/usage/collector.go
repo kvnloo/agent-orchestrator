@@ -192,6 +192,10 @@ type Collector struct {
 	mu                      sync.Mutex
 	// Guarded separately from mu, which RecordHook holds across the whole hook.
 	routeMu sync.RWMutex
+	// Watch-root callbacks must stay independent from mu: Qwen root resolution
+	// occurs both before and while collector reconciliation holds the main lock.
+	watchRootMu             sync.RWMutex
+	notifyWatchRootResolved func(string)
 }
 
 func (c *Collector) qwenUsageRoot(ctx context.Context, sessionID domain.SessionID) (string, error) {
@@ -221,7 +225,9 @@ func (c *Collector) qwenUsageRoot(ctx context.Context, sessionID domain.SessionI
 	if runtimeDir == globalRuntime {
 		return c.roots.QwenUsage, nil
 	}
-	return filepath.Join(runtimeDir, "usage"), nil
+	root := filepath.Join(runtimeDir, "usage")
+	c.publishDynamicWatchRoot(root)
+	return root, nil
 }
 
 // OnRouteResolved registers the handler called the first time a binding learns
@@ -241,6 +247,34 @@ func (c *Collector) routeResolvedHandler() func() {
 	c.routeMu.RLock()
 	defer c.routeMu.RUnlock()
 	return c.notifyRouteResolved
+}
+
+// OnWatchRootResolved registers the non-blocking lane used when a provider's
+// trusted transcript root is session-specific and therefore was not known when
+// the daemon created its static watcher allowlist.
+func (c *Collector) OnWatchRootResolved(handler func(string)) {
+	if c == nil {
+		return
+	}
+	c.watchRootMu.Lock()
+	defer c.watchRootMu.Unlock()
+	c.notifyWatchRootResolved = handler
+}
+
+func (c *Collector) watchRootResolvedHandler() func(string) {
+	c.watchRootMu.RLock()
+	defer c.watchRootMu.RUnlock()
+	return c.notifyWatchRootResolved
+}
+
+func (c *Collector) publishDynamicWatchRoot(root string) {
+	root = strings.TrimSpace(root)
+	if root == "" || filepath.Clean(root) == filepath.Clean(c.roots.QwenUsage) {
+		return
+	}
+	if notify := c.watchRootResolvedHandler(); notify != nil {
+		notify(root)
+	}
 }
 
 // NewCollector constructs a transcript source registrar.
