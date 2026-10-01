@@ -2063,7 +2063,10 @@ func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID)
 		m.cleanupAttachments(ctx, id)
 		return
 	}
-	m.markSpawnFailedTerminated(ctx, id)
+	// DeleteSession is allowed to consume the rollback deadline. Terminal truth
+	// must get a fresh detached budget after that boundary; otherwise a failed
+	// seed delete can leave a dead spawn durably live/idle.
+	m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 }
 
 // rollbackSpawn deletes a session row when it is still in seed state — used
