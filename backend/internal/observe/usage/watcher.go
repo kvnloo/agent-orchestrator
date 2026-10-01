@@ -49,23 +49,9 @@ func NewTranscriptWatcher(ctx context.Context, roots []string) (*TranscriptWatch
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	normalized, err := normalizeTranscriptRoots(roots)
+	normalized, err := normalizeAndResolveTranscriptRoots(ctx, roots)
 	if err != nil {
 		return nil, err
-	}
-	for index, root := range normalized {
-		resolved, err := resolveTranscriptRoot(ctx, root)
-		if err != nil {
-			return nil, fmt.Errorf("resolve transcript root: %w", redactFilesystemError(err))
-		}
-		normalized[index] = resolved
-		info, err := os.Stat(resolved)
-		if err == nil && !info.IsDir() {
-			return nil, errors.New("transcript root is not a directory")
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("inspect transcript root: %w", redactFilesystemError(err))
-		}
 	}
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -103,6 +89,26 @@ func (w *TranscriptWatcher) Start(ctx context.Context) <-chan struct{} {
 	return w.done
 }
 
+// SetRoots replaces the trusted provider-root allowlist used to admit exact
+// durable source paths. Callers must derive these roots from provider/session
+// configuration, never from filesystem events themselves.
+func (w *TranscriptWatcher) SetRoots(ctx context.Context, roots []string) error {
+	normalized, err := normalizeAndResolveTranscriptRoots(ctx, roots)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if w.closed {
+		return errors.New("transcript watcher is closed")
+	}
+	w.roots = normalized
+	return w.rebuildLocked(ctx)
+}
+
 // Rebuild replaces the current watch set using exact durable source paths. It
 // is safe during event handling and also serves as fsnotify-overflow recovery.
 func (w *TranscriptWatcher) Rebuild(ctx context.Context, sourcePaths []string) error {
@@ -120,7 +126,7 @@ func (w *TranscriptWatcher) Rebuild(ctx context.Context, sourcePaths []string) e
 	w.sourcePaths = w.sourcePaths[:0]
 	for _, path := range sourcePaths {
 		path = canonicalTranscriptPath(path)
-		if w.withinDesiredRoot(ctx, path) {
+		if w.withinDesiredRootLocked(ctx, path) {
 			w.sourcePaths = append(w.sourcePaths, path)
 		}
 	}
@@ -181,18 +187,21 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 		return "", false, err
 	}
 	path := canonicalTranscriptPath(event.Name)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return "", false, nil
+	}
+
 	emit := ""
 	discovery := false
 	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
 		filepath.Ext(path) == ".jsonl" &&
-		w.withinDesiredRoot(ctx, path) {
+		w.withinDesiredRootLocked(ctx, path) {
 		emit = path
 		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
 	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed || event.Op&(fsnotify.Rename|fsnotify.Remove) == 0 {
+	if event.Op&(fsnotify.Rename|fsnotify.Remove) == 0 {
 		return emit, discovery, nil
 	}
 	if _, watched := w.watched[path]; !watched {
@@ -265,7 +274,7 @@ func (w *TranscriptWatcher) desiredWatchSetLocked(ctx context.Context) (map[stri
 	return result, nil
 }
 
-func (w *TranscriptWatcher) withinDesiredRoot(ctx context.Context, path string) bool {
+func (w *TranscriptWatcher) withinDesiredRootLocked(ctx context.Context, path string) bool {
 	for _, root := range w.roots {
 		if ctx.Err() != nil {
 			return false
@@ -297,6 +306,29 @@ func (w *TranscriptWatcher) sendError(ctx context.Context, err error) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func normalizeAndResolveTranscriptRoots(ctx context.Context, roots []string) ([]string, error) {
+	normalized, err := normalizeTranscriptRoots(roots)
+	if err != nil {
+		return nil, err
+	}
+	for index, root := range normalized {
+		resolved, err := resolveTranscriptRoot(ctx, root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve transcript root: %w", redactFilesystemError(err))
+		}
+		normalized[index] = resolved
+		info, err := os.Stat(resolved)
+		if err == nil && !info.IsDir() {
+			return nil, errors.New("transcript root is not a directory")
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("inspect transcript root: %w", redactFilesystemError(err))
+		}
+	}
+	sort.Strings(normalized)
+	return normalized, nil
 }
 
 func normalizeTranscriptRoots(roots []string) ([]string, error) {
