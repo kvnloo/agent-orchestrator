@@ -148,3 +148,38 @@ func TestObserveTerminalOutcomeIgnoresLiveSession(t *testing.T) {
 		t.Fatalf("outcome calls = %d, want 0", advisor.outcomeCalls)
 	}
 }
+
+
+func TestRollbackSpawnSeedRowReportsDeletedDisposition(t *testing.T) {
+	store := newFakeStore()
+	store.sessions["proj-9"] = domain.SessionRecord{
+		ID:        "proj-9",
+		ProjectID: "proj",
+		Kind:      domain.KindWorker,
+		Harness:   "codex",
+		Mode:      domain.SessionModeTUI,
+	}
+	advisor := &captureIntelligenceAdvisor{}
+	m := New(Deps{
+		Store:        store,
+		Messenger:    &fakeMessenger{},
+		Intelligence: advisor,
+		DataDir:      t.TempDir(),
+	})
+
+	m.rollbackSpawnSeedRow(context.Background(), "proj-9")
+
+	if _, ok := store.sessions["proj-9"]; ok {
+		t.Fatal("seed row still exists after rollback")
+	}
+	if advisor.outcomeCalls != 1 {
+		t.Fatalf("outcome calls = %d, want 1", advisor.outcomeCalls)
+	}
+	got := advisor.outcome
+	if got.OutcomeID != "ao-outcome-proj-9-seed-deleted" ||
+		got.Evidence.Disposition != "seed_deleted" || got.Evidence.Terminated ||
+		got.Outcome.ExecutionCompleted != nil || got.Outcome.PRMerged != nil ||
+		got.Outcome.CIFailed != nil {
+		t.Fatalf("seed-delete outcome = %+v", got)
+	}
+}
