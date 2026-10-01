@@ -97,7 +97,9 @@ func TestClientObserveOutcome(t *testing.T) {
 		if in.TraceID != "ao-spawn-proj-1" || in.OutcomeID != "ao-outcome-proj-1-terminated" {
 			t.Fatalf("identity = %+v", in)
 		}
-		if !in.Terminated || !in.SCMComplete || len(in.PRs) != 1 || !in.PRs[0].Merged {
+		if in.Outcome.PRMerged == nil || !*in.Outcome.PRMerged ||
+			!in.Evidence.Terminated || !in.Evidence.SCMComplete ||
+			len(in.Evidence.PRs) != 1 || !in.Evidence.PRs[0].Merged {
 			t.Fatalf("evidence = %+v", in)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -108,22 +110,32 @@ func TestClientObserveOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	completed := true
+	merged := true
 	err = client.ObserveOutcome(context.Background(), ports.SpawnOutcomeRequest{
-		Schema:      ports.SpawnOutcomeSchema,
-		TraceID:     "ao-spawn-proj-1",
-		OutcomeID:   "ao-outcome-proj-1-terminated",
-		SessionID:   "proj-1",
-		ProjectID:   "proj",
-		Kind:        "worker",
-		Harness:     "codex",
-		Mode:        "tui",
-		Activity:    "idle",
-		Terminated:  true,
-		SCMComplete: true,
-		PRs: []ports.SpawnOutcomePR{{
-			URL: "https://github.com/example/repo/pull/1", Number: 1, Merged: true,
-			CI: "passing", Review: "approved", Mergeability: "mergeable",
-		}},
+		Schema:    ports.SpawnOutcomeSchema,
+		TraceID:   "ao-spawn-proj-1",
+		OutcomeID: "ao-outcome-proj-1-terminated",
+		SessionID: "proj-1",
+		Outcome: ports.SpawnOutcome{
+			ExecutionCompleted: &completed,
+			PRMerged:           &merged,
+			Source:             "agent-orchestrator",
+			VerificationSource: "ao-pr-merge",
+		},
+		Evidence: ports.SpawnOutcomeEvidence{
+			ProjectID: "proj",
+			Kind:      "worker",
+			Harness:   "codex",
+			Mode:      "tui",
+			Activity:  "idle",
+			Terminated: true,
+			SCMComplete: true,
+			PRs: []ports.SpawnOutcomePR{{
+				URL: "https://github.com/example/repo/pull/1", Number: 1, Merged: true,
+				CI: "passing", Review: "approved", Mergeability: "mergeable",
+			}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
