@@ -123,9 +123,24 @@ func TestCollectorDiscoversWorkspaceRelativeQwenUsage(t *testing.T) {
 	})
 	mustNoError(t, err)
 	collector := NewCollector(store, SourceRoots{QwenUsage: filepath.Join(home, ".qwen", "usage")}, nil)
+	resolvedRoots := make(chan string, 2)
+	collector.OnWatchRootResolved(func(root string) {
+		select {
+		case resolvedRoots <- root:
+		default:
+		}
+	})
 	mustNoError(t, collector.RecordHook(context.Background(), session.ID, HookSignal{
 		Harness: domain.HarnessQwen, Event: "session-start", NativeSessionID: nativeID,
 	}))
+	select {
+	case got := <-resolvedRoots:
+		if want := filepath.Join(workspace, ".qwen-runtime", "usage"); filepath.Clean(got) != filepath.Clean(want) {
+			t.Fatalf("published Qwen watch root = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("workspace-specific Qwen watch root was not published")
+	}
 	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
 	if err != nil || len(bindings) != 1 {
 		t.Fatalf("bindings=%+v err=%v", bindings, err)
