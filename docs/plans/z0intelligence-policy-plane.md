@@ -51,15 +51,24 @@ the spawn decision. A deterministic `ao-outcome-<session-id>-terminated`
 outcome id lets the receiver make replay idempotent without AO persisting
 sidecar receipt state.
 
-The terminal snapshot contains only durable, bounded evidence:
+The wire intentionally separates the generic z0 Outcome from AO-specific
+evidence. Durable termination reports `execution_completed=true` but never
+claims verified success from termination alone. A merged PR emits
+`pr_merged=true` with `verification_source=ao-pr-merge`; otherwise failing
+CI can emit `ci_failed=true`. Unknown/negative facts stay absent rather than
+being guessed.
+
+The bounded evidence envelope contains:
 - AO session/project/role/harness/mode/model identity
 - terminal flag + last normalized activity state
-- every attributed PR's draft/merged/closed state
-- normalized CI, review, mergeability, unresolved-comment, external-review facts
+- up to 32 attributed PRs (newest first)
+- draft/merged/closed, CI, review, mergeability, unresolved/external-review facts
 - PR URL/number/head SHA for evidence joins
 
-It deliberately excludes review bodies, CI logs, transcripts, task history,
-environment variables, credentials, and provider payloads.
+If PR evidence must be truncated, `scm_complete=false` makes the partial
+snapshot explicit. The payload deliberately excludes review bodies, CI logs,
+transcripts, task history, environment variables, credentials, and provider
+payloads.
 
 Outcome delivery is still shadow-only and fail-open with the same 300 ms budget.
 AO re-reads canonical state after Kill/replacement termination and emits only
