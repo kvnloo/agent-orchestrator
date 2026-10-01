@@ -3603,6 +3603,11 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 		recreated = recreated || missing
 	}
+	needsSetup, err := m.prepareRecreatedWorkspaceSetup(rec, recreated)
+	if err != nil {
+		m.logger.Error("restore-all: record pending workspace setup failed", "sessionID", rec.ID, "error", err)
+		return
+	}
 
 	// Step 1: ensure the worktree exists. workspace.Restore re-creates it
 	// if it was removed by SaveAndTeardownAll.
@@ -3676,9 +3681,13 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			}
 		}
 	}
-	if recreated {
+	if needsSetup {
 		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
+			return
+		}
+		if err := m.clearRecreatedWorkspaceSetup(rec); err != nil {
+			m.logger.Error("restore-all: clear pending workspace setup failed", "sessionID", rec.ID, "error", err)
 			return
 		}
 	}
@@ -3749,6 +3758,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
+		needsSetup, err := m.prepareRecreatedWorkspaceSetup(rec, recreated)
+		if err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("record pending workspace setup: %w", err)
+		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 			ProjectID:     rec.ProjectID,
 			SessionID:     rec.ID,
@@ -3765,9 +3778,12 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
-		if recreated {
+		if needsSetup {
 			if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
+			}
+			if err := m.clearRecreatedWorkspaceSetup(rec); err != nil {
+				return ports.WorkspaceInfo{}, fmt.Errorf("clear pending workspace setup: %w", err)
 			}
 		}
 		return ws, nil
@@ -3784,25 +3800,79 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		recreated = recreated || missing
 	}
+	needsSetup, err := m.prepareRecreatedWorkspaceSetup(rec, recreated)
+	if err != nil {
+		return ports.WorkspaceInfo{}, fmt.Errorf("record pending workspace setup: %w", err)
+	}
 	root, err := m.restoreWorkspaceProjectRows(ctx, rows)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
+	}
+	ws := workspaceInfoFromRepoInfo(root)
+	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
+		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
+	}
+	if needsSetup {
+		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
+		}
 	}
 	for _, row := range rows {
 		if err := m.upsertWorkspaceProjectRowState(ctx, row, "active"); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("mark repo %s active: %w", row.RepoName, err)
 		}
 	}
-	ws := workspaceInfoFromRepoInfo(root)
-	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
-		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
-	}
-	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
-			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
+	if needsSetup {
+		if err := m.clearRecreatedWorkspaceSetup(rec); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("clear pending workspace setup: %w", err)
 		}
 	}
 	return ws, nil
+}
+
+func (m *Manager) recreatedWorkspaceSetupPath(rec domain.SessionRecord) string {
+	if strings.TrimSpace(m.dataDir) == "" {
+		return ""
+	}
+	return filepath.Join(
+		m.dataDir,
+		"workspace-setup-pending",
+		fmt.Sprintf("%s-%d.pending", rec.ID, rec.CreatedAt.UTC().UnixNano()),
+	)
+}
+
+func (m *Manager) prepareRecreatedWorkspaceSetup(rec domain.SessionRecord, recreated bool) (bool, error) {
+	path := m.recreatedWorkspaceSetupPath(rec)
+	if path == "" {
+		return recreated, nil
+	}
+	_, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return false, err
+	case !recreated:
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, []byte("pending\n"), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *Manager) clearRecreatedWorkspaceSetup(rec domain.SessionRecord) error {
+	path := m.recreatedWorkspaceSetupPath(rec)
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func workspacePathMissing(path string) (bool, error) {
