@@ -97,7 +97,11 @@ func (m *Manager) observeTerminalOutcome(ctx context.Context, id domain.SessionI
 			m.logger.Warn("z0intelligence outcome SCM read failed; reporting incomplete evidence",
 				"sessionID", id, "error", readErr)
 		} else {
-			scmComplete = true
+			const maxOutcomePRs = 32
+			scmComplete = len(facts) <= maxOutcomePRs
+			if len(facts) > maxOutcomePRs {
+				facts = facts[:maxOutcomePRs]
+			}
 			prs = make([]ports.SpawnOutcomePR, 0, len(facts))
 			for _, pr := range facts {
 				prs = append(prs, ports.SpawnOutcomePR{
