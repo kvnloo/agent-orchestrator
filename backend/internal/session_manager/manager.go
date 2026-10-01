@@ -1432,6 +1432,7 @@ func sessionPrefix(project domain.ProjectRecord) string {
 // rollbackSpawnSeedRow.
 func (m *Manager) markSpawnFailedTerminated(ctx context.Context, id domain.SessionID) {
 	_ = m.lcm.MarkTerminated(ctx, id)
+	m.observeTerminalOutcome(ctx, id)
 	m.cleanupSystemPromptDir(id)
 }
 
@@ -1530,6 +1531,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if !ok {
 		return false, nil // already gone: benign race
 	}
+	// Outcome reporting is deferred until Kill settles, then re-reads the
+	// canonical row and emits only if termination actually became durable.
+	defer m.observeTerminalOutcome(ctx, id)
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -1665,6 +1669,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if !ok || rec.IsTerminated {
 		return nil
 	}
+	defer m.observeTerminalOutcome(ctx, id)
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	if rec.Metadata.WorkspacePath == "" || rec.Metadata.Branch == "" {
