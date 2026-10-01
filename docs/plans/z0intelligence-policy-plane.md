@@ -52,16 +52,15 @@ outcome id lets the receiver make replay idempotent without AO persisting
 sidecar receipt state.
 
 The wire intentionally separates the generic z0 Outcome from AO-specific
-evidence. Durable termination reports `execution_completed=true` but never
-claims verified success from termination alone. A merged PR emits
-`pr_merged=true` with `verification_source=ao-pr-merge`; otherwise failing
-CI can emit `ci_failed=true`. Unknown/negative facts stay absent rather than
-being guessed.
+evidence. Durable termination alone does not claim execution completion or
+verified success. A merged PR emits `pr_merged=true` with
+`verification_source=ao-pr-merge`; otherwise failing CI can emit
+`ci_failed=true`. Unknown facts stay absent rather than being guessed.
 
 The bounded evidence envelope contains:
 - AO session/project/role/harness/mode/model identity
 - terminal flag + last normalized activity state
-- up to 32 attributed PRs (newest first)
+- up to 8 attributed PRs (newest first)
 - draft/merged/closed, CI, review, mergeability, unresolved/external-review facts
 - PR URL/number/head SHA for evidence joins
 
