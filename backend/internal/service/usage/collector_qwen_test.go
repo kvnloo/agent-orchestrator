@@ -158,6 +158,37 @@ func TestCollectorDiscoversQwenSharedMonthlyUsage(t *testing.T) {
 	}
 }
 
+func TestCollectorQwenLateDiscoveryRegistersAllExistingMonths(t *testing.T) {
+	const nativeID = "qwen-session-late-discovery"
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessQwen, nativeID, false)
+	root := t.TempDir()
+	july := filepath.Join(root, "token-usage-2026-07.jsonl")
+	august := filepath.Join(root, "token-usage-2026-08.jsonl")
+	writeUsageFixture(t, july, `{"schemaVersion":1,"id":"july","sessionId":"`+nativeID+`","model":"qwen3","inputTokens":1,"outputTokens":1,"cachedTokens":0,"thoughtsTokens":0,"totalTokens":2}`+"\n")
+	writeUsageFixture(t, august, `{"schemaVersion":1,"id":"august","sessionId":"`+nativeID+`","model":"qwen3","inputTokens":2,"outputTokens":1,"cachedTokens":0,"thoughtsTokens":0,"totalTokens":3}`+"\n")
+	collector := NewCollector(store, SourceRoots{QwenUsage: root}, nil)
+
+	mustNoError(t, collector.RecordHook(context.Background(), session.ID, HookSignal{
+		Harness: domain.HarnessQwen, Event: "session-start", NativeSessionID: nativeID,
+	}))
+	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
+	if err != nil || len(bindings) != 1 {
+		t.Fatalf("bindings=%+v err=%v", bindings, err)
+	}
+	sources, err := store.ListUsageSourcesForBinding(context.Background(), bindings[0].ID)
+	if err != nil || len(sources) != 2 {
+		t.Fatalf("sources=%+v err=%v, want both existing months", sources, err)
+	}
+	got := []string{sources[0].ArtifactPath, sources[1].ArtifactPath}
+	slices.Sort(got)
+	want := []string{canonicalUsagePath(t, july), canonicalUsagePath(t, august)}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("paths=%v want=%v", got, want)
+	}
+}
+
 func TestCollectorQwenRegistersLaterMonthlyRollover(t *testing.T) {
 	const nativeID = "qwen-session-1"
 	store := collectorTestStore(t)
