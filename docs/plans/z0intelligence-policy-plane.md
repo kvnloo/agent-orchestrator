@@ -43,6 +43,30 @@ If a later promoted policy needs to influence pre-seed routing, first add a
 first-class spawn idempotency key at the API/service boundary. Do not infer one
 from prompt contents.
 
+## P1a implemented on the outcome-ledger stack
+
+Terminal AO outcomes are projected back to z0intelligence as
+`ao.z0int.outcome.v1` using the same `ao-spawn-<session-id>` trace identity as
+the spawn decision. A deterministic `ao-outcome-<session-id>-terminated`
+outcome id lets the receiver make replay idempotent without AO persisting
+sidecar receipt state.
+
+The terminal snapshot contains only durable, bounded evidence:
+- AO session/project/role/harness/mode/model identity
+- terminal flag + last normalized activity state
+- every attributed PR's draft/merged/closed state
+- normalized CI, review, mergeability, unresolved-comment, external-review facts
+- PR URL/number/head SHA for evidence joins
+
+It deliberately excludes review bodies, CI logs, transcripts, task history,
+environment variables, credentials, and provider payloads.
+
+Outcome delivery is still shadow-only and fail-open with the same 300 ms budget.
+AO re-reads canonical state after Kill/replacement termination and emits only
+when `is_terminated` is durable. Failed-spawn paths that preserve a terminal
+session also emit evidence. `scm_complete=false` distinguishes a missing/failed
+SCM projection from a legitimately empty PR set.
+
 ## Promotion sequence
 
 `off -> shadow -> assist -> selective authority`
@@ -50,7 +74,7 @@ from prompt contents.
 Selective authority is allowed only for independently calibrated, bounded
 decision families. AO permission/capability rules remain final.
 
-Next slice: project AO lifecycle + SCM evidence back to z0intelligence's
-`ao.z0int.outcome.v1` endpoint, then measure join coverage, abstention,
-risk/coverage, retries/corrections, verified outcomes, latency, and real token
-economics before enabling assist mode.
+Next: emit intermediate outcome revisions after durable lifecycle/SCM fact
+changes, then measure join coverage, abstention, risk/coverage,
+retries/corrections, verified outcomes, latency, and real token economics
+before enabling assist mode.
