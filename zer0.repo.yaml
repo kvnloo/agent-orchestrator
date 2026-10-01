@@ -1,0 +1,83 @@
+version: 1
+repo: kvnloo/agent-orchestrator
+id: agent-orchestrator
+kind: suite
+summary: Multi-agent development workspace with a local daemon, agent adapters, isolated worker workspaces, project orchestration, and live review/CI supervision.
+
+architecture:
+  subsystems:
+    - id: orchestration-daemon
+      name: Local orchestration daemon
+      kind: runtime
+      summary: Owns worker lifecycle, repository/worktree state, project orchestration, and the local control plane.
+      paths:
+        - backend/cmd/ao/
+        - backend/internal/
+        - contracts/
+
+    - id: agent-adapters
+      name: Agent adapter layer
+      kind: integration
+      summary: Normalizes heterogeneous coding-agent CLIs, activity, auth, hooks, continuation, and terminal state behind one supervisor.
+      paths:
+        - backend/internal/adapters/agent/
+      depends_on: [orchestration-daemon]
+
+    - id: worker-isolation
+      name: Worker workspace isolation
+      kind: execution
+      summary: Gives Git-backed workers isolated branches/worktrees and keeps task, session, source-control, CI, and review state attached to one worker.
+      paths:
+        - backend/
+        - contracts/
+        - test/
+      depends_on: [orchestration-daemon]
+
+    - id: project-orchestrator
+      name: Project orchestrator
+      kind: orchestration
+      summary: Maintains project-scoped planning context and delegates bounded work to workers while preserving ownership and feedback loops.
+      paths:
+        - backend/
+        - contracts/
+        - docs/
+      depends_on: [orchestration-daemon, worker-isolation]
+
+    - id: desktop-surface
+      name: Desktop supervision surface
+      kind: presentation
+      summary: Presents workers, Kanban state, terminals, browser previews, pull requests, CI, and review feedback without becoming execution authority.
+      paths:
+        - frontend/
+        - packages/
+      depends_on: [orchestration-daemon]
+
+  provides_interfaces: []
+  consumes_interfaces: []
+  produces_representations: []
+  consumes_representations: []
+
+  boundaries:
+    owns:
+      - local multi-agent supervision
+      - worker lifecycle and isolation
+      - coding-agent adapter normalization
+      - project planning and delegation surface
+      - review and CI supervision
+    not_here:
+      - canonical Zer0 architecture authority
+      - z0intelligence decision policy authority
+      - AODL ontology authority
+      - token measurement semantics
+
+  evidence:
+    docs:
+      - README.md
+      - DESIGN.md
+      - CONTEXT.md
+    tests:
+      - backend/e2e/
+      - backend/internal/
+      - test/
+    schemas:
+      - contracts/
