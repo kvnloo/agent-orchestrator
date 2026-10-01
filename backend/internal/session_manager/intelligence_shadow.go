@@ -155,6 +155,7 @@ func (m *Manager) observeTerminalOutcome(ctx context.Context, id domain.SessionI
 			Mode:        string(domain.NormalizeSessionMode(rec.Mode)),
 			Model:       rec.Metadata.Model,
 			Activity:    string(rec.Activity.State),
+			Disposition: "terminated",
 			Terminated:  true,
 			SCMComplete: scmComplete,
 			PRs:         prs,
@@ -171,4 +172,42 @@ func (m *Manager) observeTerminalOutcome(ctx context.Context, id domain.SessionI
 		"scmComplete", scmComplete,
 		"prCount", len(prs),
 	)
+}
+
+
+func (m *Manager) observeSeedDeletedOutcome(ctx context.Context, rec domain.SessionRecord) {
+	if m.intelligence == nil || rec.ID == "" {
+		return
+	}
+	outcomeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), intelligenceShadowTimeout)
+	defer cancel()
+
+	req := ports.SpawnOutcomeRequest{
+		Schema:    ports.SpawnOutcomeSchema,
+		TraceID:   "ao-spawn-" + string(rec.ID),
+		OutcomeID: "ao-outcome-" + string(rec.ID) + "-seed-deleted",
+		SessionID: string(rec.ID),
+		Outcome: ports.SpawnOutcome{
+			Source: "agent-orchestrator",
+		},
+		Evidence: ports.SpawnOutcomeEvidence{
+			ProjectID:   string(rec.ProjectID),
+			Kind:        string(rec.Kind),
+			Harness:     string(rec.Harness),
+			Mode:        string(domain.NormalizeSessionMode(rec.Mode)),
+			Model:       rec.Metadata.Model,
+			Activity:    string(rec.Activity.State),
+			Disposition: "seed_deleted",
+			Terminated:  false,
+			SCMComplete: false,
+			PRs:         []ports.SpawnOutcomePR{},
+		},
+	}
+	if err := m.intelligence.ObserveOutcome(outcomeCtx, req); err != nil {
+		m.logger.Warn("z0intelligence seed-delete outcome unavailable; continuing unchanged",
+			"sessionID", rec.ID, "outcomeID", req.OutcomeID, "error", err)
+		return
+	}
+	m.logger.Info("z0intelligence seed-delete outcome reported",
+		"sessionID", rec.ID, "outcomeID", req.OutcomeID)
 }
