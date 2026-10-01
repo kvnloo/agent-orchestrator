@@ -81,6 +81,61 @@ func TestDefaultSourceRootsQwenRuntimeEnvironmentTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestDefaultSourceRootsQwenSettingsFailureKeepsSharedCollectorUsable(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".ao", "data")
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("QWEN_HOME", "")
+	t.Setenv("QWEN_RUNTIME_DIR", "")
+	// A directory at the settings path makes os.ReadFile fail on supported
+	// platforms without relying on permission bits that root can bypass.
+	if err := os.MkdirAll(filepath.Join(home, ".qwen", "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DefaultSourceRoots(context.Background(), dataDir)
+	if err != nil {
+		t.Fatalf("DefaultSourceRoots: %v", err)
+	}
+	if got.ClaudeProjects != filepath.Join(home, ".claude", "projects") ||
+		got.CodexSessions != filepath.Join(home, ".codex", "sessions") ||
+		got.KimiHome != filepath.Join(dataDir, "kimi") {
+		t.Fatalf("shared roots were lost after Qwen settings failure: %+v", got)
+	}
+	if got.QwenUsage != filepath.Join(home, ".qwen", "usage") {
+		t.Fatalf("Qwen fallback root = %q", got.QwenUsage)
+	}
+}
+
+func TestDefaultSourceRootsQwenSettingsFailurePreservesConfiguredHome(t *testing.T) {
+	home := t.TempDir()
+	qwenHome := filepath.Join(t.TempDir(), "custom-qwen")
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("QWEN_HOME", qwenHome)
+	t.Setenv("QWEN_RUNTIME_DIR", "")
+	if err := os.MkdirAll(filepath.Join(qwenHome, "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DefaultSourceRoots(context.Background(), "")
+	if err != nil {
+		t.Fatalf("DefaultSourceRoots: %v", err)
+	}
+	if got.QwenUsage != filepath.Join(qwenHome, "usage") {
+		t.Fatalf("Qwen fallback root = %q, want configured home", got.QwenUsage)
+	}
+}
+
+func TestDefaultSourceRootsStillPropagatesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := DefaultSourceRoots(ctx, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DefaultSourceRoots error = %v, want context.Canceled", err)
+	}
+}
+
 func TestQwenRuntimeBaseDirUsesWorkspaceSettings(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
