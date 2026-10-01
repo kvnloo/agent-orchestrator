@@ -1832,8 +1832,28 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // don't accumulate terminated rows in session lists. DeleteSession only removes
 // rows still in seed state; if the row has progressed or the delete itself
 // fails, fall back to parking it terminated so a phantom row never looks live.
+type codexSessionRouteRevoker interface {
+	RevokeSession(context.Context, string) error
+}
+
+func (m *Manager) revokeDeletedSessionRoute(ctx context.Context, id domain.SessionID) {
+	revoker, ok := m.codexRouteProvider.(codexSessionRouteRevoker)
+	if !ok || revoker == nil {
+		return
+	}
+	cleanupCtx, cancel := spawnRollbackContext(ctx)
+	defer cancel()
+	if err := revoker.RevokeSession(cleanupCtx, string(id)); err != nil {
+		m.logger.Warn("spawn rollback: failed to revoke deleted session provider route",
+			"sessionID", id,
+			"error", err,
+		)
+	}
+}
+
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+		m.revokeDeletedSessionRoute(ctx, id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -1858,6 +1878,7 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
 	}
 	if deleted {
+		m.revokeDeletedSessionRoute(ctx, id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return true, false, nil
