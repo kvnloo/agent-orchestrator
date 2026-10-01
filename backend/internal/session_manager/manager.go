@@ -2391,7 +2391,11 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 		}
 	}
 	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
-		return fmt.Errorf("retire replacement %s: %w", id, err)
+		cleanupErr := fmt.Errorf("retire replacement %s: %w", id, err)
+		// The runtime is already gone at this boundary. Leaving the row live
+		// would advertise a controller that can no longer exist and would also
+		// keep this preserved worktree out of ordinary terminated cleanup.
+		return errors.Join(cleanupErr, m.terminateWithPreservedWorkspace(ctx, id, err, true))
 	}
 	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
 		if staleWorkspace {
@@ -2472,7 +2476,10 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 		}
 	}
 	if err := m.runPreRemove(ctx, rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
-		return fmt.Errorf("retire replacement %s: %w", rec.ID, err)
+		cleanupErr := fmt.Errorf("retire replacement %s: %w", rec.ID, err)
+		// Workspace-project rows are the preserved inventory Cleanup needs for a
+		// later retry, so keep those rows while settling the dead predecessor.
+		return errors.Join(cleanupErr, m.terminateWithPreservedWorkspace(ctx, rec.ID, err, false))
 	}
 	for i := len(rows) - 1; i >= 0; i-- {
 		if err := m.workspace.ForceDestroy(ctx, workspaceInfoFromRepoInfo(rows[i])); err != nil {
