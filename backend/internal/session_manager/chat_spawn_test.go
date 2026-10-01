@@ -1568,6 +1568,62 @@ func TestSendRefusedForTerminatedChatSession(t *testing.T) {
 	}
 }
 
+type deadlineConsumingSeedDeleteStore struct {
+	*fakeStore
+	exhaustDeadline bool
+}
+
+func (s *deadlineConsumingSeedDeleteStore) DeleteSession(ctx context.Context, _ domain.SessionID) (bool, error) {
+	if s.exhaustDeadline {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	return false, errors.New("injected seed delete failure")
+}
+
+func TestChatSpawn_SeedDeleteDeadlineCannotStrandLiveSession(t *testing.T) {
+	previousBudget := spawnRollbackBudget
+	spawnRollbackBudget = 10 * time.Millisecond
+	t.Cleanup(func() { spawnRollbackBudget = previousBudget })
+
+	for _, tc := range []struct {
+		name            string
+		exhaustDeadline bool
+	}{
+		{name: "delete fails before deadline"},
+		{name: "delete exhausts deadline", exhaustDeadline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, st, _ := newChatManager(&recordingLauncher{
+				startErr: errors.New("provider startup timed out"),
+			})
+			mgr.dataDir = t.TempDir()
+			mgr.store = &deadlineConsumingSeedDeleteStore{
+				fakeStore:        st,
+				exhaustDeadline: tc.exhaustDeadline,
+			}
+
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID:     chatTestProject,
+				Kind:          domain.KindWorker,
+				Harness:       domain.HarnessCodex,
+				RequestedMode: domain.SessionModeChat,
+			})
+			if err == nil {
+				t.Fatal("expected provider startup error")
+			}
+			if len(st.sessions) != 1 {
+				t.Fatalf("retained sessions = %d, want 1 failed row", len(st.sessions))
+			}
+			for _, rec := range st.sessions {
+				if !rec.IsTerminated {
+					t.Fatalf("failed spawn %s remained live (%s)", rec.ID, rec.Activity.State)
+				}
+			}
+		})
+	}
+}
+
 type deadlineConsumingChatLauncher struct {
 	*recordingLauncher
 	cancel context.CancelFunc
