@@ -494,8 +494,13 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 			return err
 		}
 		inventoryChanged = inventoryChanged || changed
-		if session.Harness == domain.HarnessKimi {
+		switch session.Harness {
+		case domain.HarnessKimi:
 			if err := c.registerDiscoveredKimiAgents(ctx, binding, mainArtifact.path, now, false); err != nil {
+				return err
+			}
+		case domain.HarnessQwen:
+			if err := c.registerDiscoveredQwenMonths(ctx, binding, now, false); err != nil {
 				return err
 			}
 		}
@@ -748,6 +753,10 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 		}
 	case domain.HarnessKimi:
 		if err := c.registerDiscoveredKimiAgents(ctx, binding, path, now, false); err != nil {
+			return err
+		}
+	case domain.HarnessQwen:
+		if err := c.registerDiscoveredQwenMonths(ctx, binding, now, false); err != nil {
 			return err
 		}
 	}
@@ -1007,6 +1016,10 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 		}
 	case domain.HarnessKimi:
 		if err := c.registerDiscoveredKimiAgents(ctx, binding, path, now, false); err != nil {
+			return err
+		}
+	case domain.HarnessQwen:
+		if err := c.registerDiscoveredQwenMonths(ctx, binding, now, false); err != nil {
 			return err
 		}
 	}
@@ -2265,19 +2278,19 @@ func qwenUsageFilename(name string) bool {
 	return err == nil
 }
 
-func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.SessionID) (string, error) {
+func (c *Collector) discoverQwenPaths(ctx context.Context, sessionID domain.SessionID) ([]string, error) {
 	root, err := c.qwenUsageRoot(ctx, sessionID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	paths, err := filepath.Glob(filepath.Join(root, "token-usage-*.jsonl"))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	valid := paths[:0]
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
 		if !qwenUsageFilename(filepath.Base(path)) {
 			continue
@@ -2286,11 +2299,54 @@ func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.Sessi
 			valid = append(valid, path)
 		}
 	}
-	if len(valid) == 0 {
-		return "", nil
-	}
 	sort.Strings(valid)
-	return valid[len(valid)-1], nil
+	return valid, nil
+}
+
+func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.SessionID) (string, error) {
+	paths, err := c.discoverQwenPaths(ctx, sessionID)
+	if err != nil || len(paths) == 0 {
+		return "", err
+	}
+	return paths[len(paths)-1], nil
+}
+
+func (c *Collector) registerDiscoveredQwenMonths(
+	ctx context.Context,
+	binding domain.UsageBindingRecord,
+	now time.Time,
+	reactivateExisting bool,
+) error {
+	paths, err := c.discoverQwenPaths(ctx, binding.SessionID)
+	if err != nil {
+		return err
+	}
+	sources, err := c.store.ListUsageSourcesForBinding(ctx, binding.ID)
+	if err != nil {
+		return err
+	}
+	inventory := newBindingSourceInventory(sources)
+	var errs []error
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := c.registerSourceWithInventory(
+			ctx,
+			binding,
+			domain.UsageSourceQwenMonthly,
+			binding.NativeRootID,
+			"",
+			path,
+			now,
+			reactivateExisting,
+			inventory,
+			"",
+		); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type kimiIndexRecord struct {
