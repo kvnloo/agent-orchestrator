@@ -1459,9 +1459,13 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // rows still in seed state; if the row has progressed or the delete itself
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
+	rec, hadSeed, _ := m.store.GetSession(ctx, id)
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
+		if hadSeed {
+			m.observeSeedDeletedOutcome(ctx, rec)
+		}
 		return
 	}
 	m.markSpawnFailedTerminated(ctx, id)
@@ -1479,6 +1483,7 @@ func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID)
 //   - killed=true:  the row had spawn output and was torn down + terminated
 //   - both false:   the row was already terminated or absent — benign no-op
 func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (deleted, killed bool, err error) {
+	rec, hadSeed, _ := m.store.GetSession(ctx, id)
 	deleted, err = m.store.DeleteSession(ctx, id)
 	if err != nil {
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
@@ -1486,6 +1491,9 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 	if deleted {
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
+		if hadSeed {
+			m.observeSeedDeletedOutcome(ctx, rec)
+		}
 		return true, false, nil
 	}
 	killed, err = m.Kill(ctx, id)
