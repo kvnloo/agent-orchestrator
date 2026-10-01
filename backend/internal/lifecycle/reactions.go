@@ -439,12 +439,13 @@ func mergeConflictKey(prURL string) string { return "merge-conflict:" + prURL }
 // GitHub reports while it recomputes mergeability after a push or a retarget;
 // re-arming on it would defeat the dedup entirely, since a conflict that never
 // went away flaps unknown → conflicting and would re-nudge on every poll.
-// `blocked` is excluded on the same grounds even though it is not literally a
-// conflict: the observer synthesizes it locally from draft / failing-CI /
-// changes-requested facts (see mergeabilityFromProviderFacts), so it is reported
-// even while provider mergeability is still unknown and cannot be read as proof
-// the conflict is gone. `mergeable` and `unstable` both require a computed
-// provider rollup that ruled conflicts out first, so both are definitive.
+// `blocked` is not sufficient on its own: the observer synthesizes it from
+// draft / failing-CI / review facts (see mergeabilityFromProviderFacts), so AO
+// can report it while provider mergeability is still unknown. ApplyPRObservation
+// separately consults the just-persisted provider facts for blocked PRs and
+// re-arms only when those facts positively prove the branch itself is clean.
+// `mergeable` and `unstable` already require a computed provider rollup that
+// ruled conflicts out first, so both remain definitive here.
 func mergeabilityClearsConflict(state domain.Mergeability) bool {
 	return state == domain.MergeMergeable || state == domain.MergeUnstable
 }
