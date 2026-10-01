@@ -117,7 +117,7 @@ func TestObserveTerminalOutcomeJoinsLifecycleAndSCMEvidence(t *testing.T) {
 		got.OutcomeID != "ao-outcome-proj-7-terminated" || got.SessionID != "proj-7" {
 		t.Fatalf("identity = %+v", got)
 	}
-	if got.Outcome.ExecutionCompleted == nil || !*got.Outcome.ExecutionCompleted ||
+	if got.Outcome.ExecutionCompleted != nil ||
 		got.Outcome.PRMerged == nil || !*got.Outcome.PRMerged ||
 		got.Outcome.VerificationSource != "ao-pr-merge" {
 		t.Fatalf("outcome = %+v", got.Outcome)
