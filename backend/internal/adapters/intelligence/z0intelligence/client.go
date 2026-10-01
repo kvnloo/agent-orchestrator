@@ -15,7 +15,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const spawnDecisionPath = "/v1/integrations/agent-orchestrator/spawn-decision"
+const (
+	spawnDecisionPath = "/v1/integrations/agent-orchestrator/spawn-decision"
+	spawnOutcomePath  = "/v1/integrations/agent-orchestrator/outcome"
+)
 
 // Client is the loopback-only HTTP adapter for the z0intelligence policy plane.
 type Client struct {
@@ -88,6 +91,36 @@ func (c *Client) AdviseSpawn(ctx context.Context, in ports.SpawnDecisionRequest)
 		return ports.SpawnDecision{}, fmt.Errorf("invalid z0intelligence spawn decision action %q", out.Action)
 	}
 	return out, nil
+}
+
+// ObserveOutcome reports bounded durable AO lifecycle + SCM evidence. It is
+// intentionally write-only: AO remains the canonical state owner and does not
+// accept mutations or routing instructions on this path.
+func (c *Client) ObserveOutcome(ctx context.Context, in ports.SpawnOutcomeRequest) error {
+	if in.Schema != ports.SpawnOutcomeSchema || strings.TrimSpace(in.TraceID) == "" ||
+		strings.TrimSpace(in.OutcomeID) == "" || strings.TrimSpace(in.SessionID) == "" {
+		return fmt.Errorf("invalid z0intelligence outcome identity")
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("encode outcome: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+spawnOutcomePath, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build outcome request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("z0intelligence outcome: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("z0intelligence outcome: HTTP %d", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	return nil
 }
 
 var _ ports.IntelligenceAdvisor = (*Client)(nil)
