@@ -119,20 +119,44 @@ func (m *Manager) observeTerminalOutcome(ctx context.Context, id domain.SessionI
 		}
 	}
 
+	executionCompleted := true
+	outcome := ports.SpawnOutcome{
+		ExecutionCompleted: &executionCompleted,
+		Source:             "agent-orchestrator",
+	}
+	anyMerged := false
+	anyCIFailed := false
+	for _, pr := range prs {
+		anyMerged = anyMerged || pr.Merged
+		anyCIFailed = anyCIFailed || pr.CI == string(domain.CIFailing)
+	}
+	if anyMerged {
+		merged := true
+		outcome.PRMerged = &merged
+		outcome.VerificationSource = "ao-pr-merge"
+	} else if anyCIFailed {
+		failed := true
+		outcome.CIFailed = &failed
+		outcome.VerificationSource = "ao-ci"
+	}
+
 	req := ports.SpawnOutcomeRequest{
-		Schema:      ports.SpawnOutcomeSchema,
-		TraceID:     "ao-spawn-" + string(rec.ID),
-		OutcomeID:   "ao-outcome-" + string(rec.ID) + "-terminated",
-		SessionID:   string(rec.ID),
-		ProjectID:   string(rec.ProjectID),
-		Kind:        string(rec.Kind),
-		Harness:     string(rec.Harness),
-		Mode:        string(domain.NormalizeSessionMode(rec.Mode)),
-		Model:       rec.Metadata.Model,
-		Activity:    string(rec.Activity.State),
-		Terminated:  true,
-		SCMComplete: scmComplete,
-		PRs:         prs,
+		Schema:    ports.SpawnOutcomeSchema,
+		TraceID:   "ao-spawn-" + string(rec.ID),
+		OutcomeID: "ao-outcome-" + string(rec.ID) + "-terminated",
+		SessionID: string(rec.ID),
+		Outcome:   outcome,
+		Evidence: ports.SpawnOutcomeEvidence{
+			ProjectID:   string(rec.ProjectID),
+			Kind:        string(rec.Kind),
+			Harness:     string(rec.Harness),
+			Mode:        string(domain.NormalizeSessionMode(rec.Mode)),
+			Model:       rec.Metadata.Model,
+			Activity:    string(rec.Activity.State),
+			Terminated:  true,
+			SCMComplete: scmComplete,
+			PRs:         prs,
+		},
 	}
 	if err := m.intelligence.ObserveOutcome(outcomeCtx, req); err != nil {
 		m.logger.Warn("z0intelligence outcome unavailable; continuing unchanged",
