@@ -210,8 +210,20 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// the nudge send loop (returned as rearmErr) so a persist failure here cannot
 	// discard CI/review nudges an unstable PR still queues below.
 	var rearmErr error
-	if mergeabilityClearsConflict(o.Mergeability) {
-		rearmErr = m.rearmMergeConflict(ctx, o.URL)
+	rearm := mergeabilityClearsConflict(o.Mergeability)
+	if !rearm && o.Mergeability == domain.MergeBlocked && o.URL != "" {
+		pr, found, readErr := m.store.GetPR(ctx, o.URL)
+		switch {
+		case readErr != nil:
+			rearmErr = fmt.Errorf("load provider mergeability for conflict re-arm %s: %w", o.URL, readErr)
+		case found:
+			rearm = providerFactsClearConflict(pr)
+		}
+	}
+	if rearm {
+		if err := m.rearmMergeConflict(ctx, o.URL); err != nil {
+			rearmErr = err
+		}
 	}
 	// A genuinely dead session — terminated, or its pane already exited to a
 	// shell — has nowhere to deliver any nudge, merge-conflict included, so
@@ -435,6 +447,27 @@ func mergeConflictKey(prURL string) string { return "merge-conflict:" + prURL }
 // provider rollup that ruled conflicts out first, so both are definitive.
 func mergeabilityClearsConflict(state domain.Mergeability) bool {
 	return state == domain.MergeMergeable || state == domain.MergeUnstable
+}
+
+// providerFactsClearConflict recovers the provider's branch-mergeability fact
+// when AO's composite verdict is blocked by review/CI/draft policy. A positive
+// provider mergeable value proves the branch itself is no longer conflicting;
+// explicit provider conflict/rebase states still fail closed even if another
+// field is stale.
+func providerFactsClearConflict(pr domain.PullRequest) bool {
+	mergeable := strings.ToLower(strings.TrimSpace(pr.ProviderMergeable))
+	state := strings.ToLower(strings.TrimSpace(pr.ProviderMergeStateStatus))
+	for _, conflict := range []string{"conflict", "conflicting", "dirty", "cannot_be_merged", "need_rebase"} {
+		if strings.Contains(mergeable, conflict) || strings.Contains(state, conflict) {
+			return false
+		}
+	}
+	switch mergeable {
+	case "mergeable", "can_be_merged":
+		return true
+	default:
+		return false
+	}
 }
 
 // rearmMergeConflict clears the merge-conflict dedup entry for prURL so a later
