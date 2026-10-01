@@ -41,6 +41,34 @@ func TestTranscriptWatcherErrorsRedactRootPath(t *testing.T) {
 	}
 }
 
+func TestTranscriptWatcherDynamicRootAdmitsPreviouslyOutOfScopeSource(t *testing.T) {
+	staticRoot := t.TempDir()
+	dynamicRoot := t.TempDir()
+	source := filepath.Join(dynamicRoot, "token-usage-2026-10.jsonl")
+	mustNoError(t, os.WriteFile(source, []byte("{}\n"), 0o600))
+
+	watcher, err := NewTranscriptWatcher(context.Background(), []string{staticRoot})
+	mustNoError(t, err)
+	t.Cleanup(watcher.close)
+
+	mustNoError(t, watcher.Rebuild(context.Background(), []string{source}))
+	watcher.mu.Lock()
+	_, watchedBefore := watcher.watched[canonicalTranscriptPath(source)]
+	watcher.mu.Unlock()
+	if watchedBefore {
+		t.Fatal("out-of-scope source was watched before its trusted root was added")
+	}
+
+	mustNoError(t, watcher.SetRoots(context.Background(), []string{staticRoot, dynamicRoot}))
+	mustNoError(t, watcher.Rebuild(context.Background(), []string{source}))
+	watcher.mu.Lock()
+	_, watchedAfter := watcher.watched[canonicalTranscriptPath(source)]
+	watcher.mu.Unlock()
+	if !watchedAfter {
+		t.Fatal("source remained unwatched after its trusted dynamic root was added")
+	}
+}
+
 func TestTranscriptWatcherDoesNotWatchUnrelatedHistory(t *testing.T) {
 	root := t.TempDir()
 	watcher, err := NewTranscriptWatcher(context.Background(), []string{root})
