@@ -43,6 +43,41 @@ If a later promoted policy needs to influence pre-seed routing, first add a
 first-class spawn idempotency key at the API/service boundary. Do not infer one
 from prompt contents.
 
+## P1a implemented on the outcome-ledger stack
+
+AO outcomes are projected back to z0intelligence as `ao.z0int.outcome.v1`
+using the same `ao-spawn-<session-id>` trace identity as the spawn decision.
+Deterministic outcome ids distinguish durable termination from an early
+`seed_deleted` rollback, so even failures that intentionally remove the seed
+row remain joinable without AO persisting sidecar receipt state.
+
+The wire intentionally separates the generic z0 Outcome from AO-specific
+evidence. Durable termination alone does not claim execution completion or
+verified success. A merged PR emits `pr_merged=true` with
+`verification_source=ao-pr-merge`; otherwise failing CI can emit
+`ci_failed=true`. Unknown facts stay absent rather than being guessed.
+
+The bounded evidence envelope contains:
+- AO session/project/role/harness/mode/model identity
+- disposition (`terminated` or `seed_deleted`) + terminal flag + last normalized activity state
+- up to 8 attributed PRs (newest first)
+- draft/merged/closed, CI, review, mergeability, unresolved/external-review facts
+- PR URL/number/head SHA for evidence joins
+
+If PR evidence must be truncated, `scm_complete=false` makes the partial
+snapshot explicit. The payload deliberately excludes review bodies, CI logs,
+transcripts, task history, environment variables, credentials, and provider
+payloads.
+
+Outcome delivery is still shadow-only and fail-open with the same 300 ms budget.
+AO re-reads canonical state after Kill/replacement termination and emits only
+when `is_terminated` is durable. Failed-spawn paths that preserve a terminal
+session also emit evidence. If an early rollback successfully deletes a seed
+row, AO emits `seed_deleted` only after that delete succeeds; it claims no
+execution completion and leaves SCM completeness false. `scm_complete=false`
+otherwise distinguishes missing/truncated SCM projection from a legitimately
+complete PR set.
+
 ## Promotion sequence
 
 `off -> shadow -> assist -> selective authority`
@@ -50,7 +85,7 @@ from prompt contents.
 Selective authority is allowed only for independently calibrated, bounded
 decision families. AO permission/capability rules remain final.
 
-Next slice: project AO lifecycle + SCM evidence back to z0intelligence's
-`ao.z0int.outcome.v1` endpoint, then measure join coverage, abstention,
-risk/coverage, retries/corrections, verified outcomes, latency, and real token
-economics before enabling assist mode.
+Next: emit intermediate outcome revisions after durable lifecycle/SCM fact
+changes, then measure join coverage, abstention, risk/coverage,
+retries/corrections, verified outcomes, latency, and real token economics
+before enabling assist mode.
