@@ -219,6 +219,9 @@ func TestSessionList_JSONOutputDecodes(t *testing.T) {
 	if got.Data[0].ID != "demo-1" || got.Data[0].ProjectID != "demo" || got.Data[0].Role != "worker" {
 		t.Fatalf("unexpected JSON entry: %#v", got.Data[0])
 	}
+	if got.Data[0].DisplayName != "Current Name" {
+		t.Fatalf("displayName = %q, want Current Name", got.Data[0].DisplayName)
+	}
 }
 
 func TestSessionList_EnrichesPRColumnsAndKeepsFallbackFacts(t *testing.T) {
