@@ -93,6 +93,13 @@ type Lifecycle interface {
 	ApplySCMObservation(ctx context.Context, sessionID domain.SessionID, obs ports.SCMObservation) error
 }
 
+// EvidenceSink observes already-durable SCM state after lifecycle acknowledgement.
+// It is intentionally non-authoritative: failures must never block SCM cursor
+// advancement or change AO lifecycle behavior.
+type EvidenceSink interface {
+	ObserveSCM(ctx context.Context, sessionID domain.SessionID) error
+}
+
 type credentialChecker interface {
 	SCMCredentialsAvailable(ctx context.Context) (bool, error)
 }
@@ -173,6 +180,9 @@ type Config struct {
 	// each poll and checks PR authors against the matching provider's identity.
 	// When nil, the observer falls back to IdentityResolver (single-provider).
 	ScopedIdentityResolver ports.ScopedIdentityResolver
+	// EvidenceSink receives a best-effort callback only after the final SCM facts
+	// and lifecycle acknowledgement are durable. Nil disables external evidence.
+	EvidenceSink EvidenceSink
 }
 
 // ObserverCache stores provider ETags and review polling timestamps in memory.
@@ -232,6 +242,9 @@ type Observer struct {
 	store Store
 	// lifecycle is notified after successful persistence of meaningful changes.
 	lifecycle Lifecycle
+	// evidenceSink observes the final durable state without participating in
+	// canonical persistence/lifecycle success.
+	evidenceSink EvidenceSink
 	// tick is the active PR/CI polling cadence.
 	tick time.Duration
 	// reviewInterval is the minimum duration between review-thread fetches per PR.
@@ -260,7 +273,7 @@ type Observer struct {
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, identityResolver: cfg.IdentityResolver, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, evidenceSink: cfg.EvidenceSink, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, identityResolver: cfg.IdentityResolver, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -615,6 +628,15 @@ func (o *Observer) Poll(ctx context.Context) error {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
 				markRepoRefreshFailed(subj.repo)
 				continue
+			}
+		}
+		if o.evidenceSink != nil {
+			if err := o.evidenceSink.ObserveSCM(ctx, subj.session.ID); err != nil {
+				o.logger.Warn("scm observer: external evidence delivery failed; continuing",
+					"session", subj.session.ID,
+					"pr", finalPR.URL,
+					"err", err,
+				)
 			}
 		}
 		// If this observation came from terminal reconciliation, a successful

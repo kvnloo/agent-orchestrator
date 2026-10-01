@@ -272,6 +272,20 @@ func (l *fakeLifecycle) ApplySCMObservation(_ context.Context, _ domain.SessionI
 	return nil
 }
 
+type fakeEvidenceSink struct {
+	calls []domain.SessionID
+	err   error
+	check func()
+}
+
+func (s *fakeEvidenceSink) ObserveSCM(_ context.Context, id domain.SessionID) error {
+	if s.check != nil {
+		s.check()
+	}
+	s.calls = append(s.calls, id)
+	return s.err
+}
+
 func newTestObserver(store *fakeStore, provider *fakeProvider, lc Lifecycle, now time.Time) *Observer {
 	cfg := Config{Clock: func() time.Time { return now }, Tick: time.Hour, Logger: quietSlog(), CacheMax: 128, IdentityResolver: provider}
 	return New(provider, store, lc, cfg)
@@ -1857,6 +1871,55 @@ func TestPoll_LifecycleFailureHoldsBackHashesForDurableRetry(t *testing.T) {
 	}
 	if last.CIHash != ciSemanticHash(changed.CI) {
 		t.Fatalf("CI hash not acknowledged after lifecycle success: got %q want %q", last.CIHash, ciSemanticHash(changed.CI))
+	}
+}
+
+func TestPoll_EvidenceSinkRunsAfterDurableAckAndCannotBlockCursor(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.MetadataHash = "old-metadata"
+	local.CIHash = "old-ci"
+	store.prs["p-1"] = []domain.PullRequest{local}
+	changed := testObs(1)
+	changed.PR.Title = "changed title"
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
+		checkGuards:  map[string]ports.SCMGuardResult{commitKey(testRepo, "sha1"): {ETag: "ci2"}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): changed},
+	}
+	lc := &fakeLifecycle{}
+	sink := &fakeEvidenceSink{err: errors.New("sidecar down")}
+	sink.check = func() {
+		if len(store.writes) != 2 {
+			t.Fatalf("evidence called before durable lifecycle acknowledgement: writes=%d", len(store.writes))
+		}
+		last := store.writes[len(store.writes)-1].pr
+		if last.MetadataHash != metadataSemanticHash(changed) || last.CIHash != ciSemanticHash(changed.CI) {
+			t.Fatalf("evidence saw unacknowledged hashes: metadata=%q ci=%q", last.MetadataHash, last.CIHash)
+		}
+	}
+	obs := New(provider, store, lc, Config{
+		Clock:            func() time.Time { return time.Unix(500, 0).UTC() },
+		Tick:             time.Hour,
+		Logger:           quietSlog(),
+		CacheMax:         128,
+		IdentityResolver: provider,
+		EvidenceSink:     sink,
+	})
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
+	obs.Cache.CommitChecksETag[commitKey(testRepo, "sha1")] = "ci1"
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 || sink.calls[0] != "p-1" {
+		t.Fatalf("evidence calls = %#v, want [p-1]", sink.calls)
+	}
+	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo2" {
+		t.Fatalf("evidence failure blocked repo cursor: got %q want repo2", got)
+	}
+	if got := obs.Cache.CommitChecksETag[commitKey(testRepo, "sha1")]; got != "ci2" {
+		t.Fatalf("evidence failure blocked CI cursor: got %q want ci2", got)
 	}
 }
 
