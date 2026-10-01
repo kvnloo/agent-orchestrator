@@ -73,14 +73,21 @@ type SpawnOutcomePR struct {
 	HeadSHA                  string `json:"head_sha,omitempty"`
 }
 
-// SpawnOutcomeRequest joins AO's durable terminal/lifecycle facts back to the
-// spawn opportunity through the same stable trace id. OutcomeID is deterministic
-// so a receiver can make replay idempotent without AO persisting sidecar state.
-type SpawnOutcomeRequest struct {
-	Schema      string           `json:"schema"`
-	TraceID     string           `json:"trace_id"`
-	OutcomeID   string           `json:"outcome_id"`
-	SessionID   string           `json:"session_id"`
+// SpawnOutcome carries only generic training/verifier signals understood by
+// z0intelligence's canonical Outcome model. Unknown/negative facts stay absent
+// rather than being guessed from session termination.
+type SpawnOutcome struct {
+	ExecutionCompleted *bool  `json:"execution_completed,omitempty"`
+	PRMerged           *bool  `json:"pr_merged,omitempty"`
+	CIFailed           *bool  `json:"ci_failed,omitempty"`
+	Source             string `json:"source,omitempty"`
+	VerificationSource string `json:"verification_source,omitempty"`
+}
+
+// SpawnOutcomeEvidence preserves AO-specific durable evidence separately from
+// the generic Outcome signal. z0intelligence can use it for attribution and
+// calibration without pretending that CI/PR metadata is itself execution truth.
+type SpawnOutcomeEvidence struct {
 	ProjectID   string           `json:"project_id"`
 	Kind        string           `json:"kind"`
 	Harness     string           `json:"harness"`
@@ -90,6 +97,18 @@ type SpawnOutcomeRequest struct {
 	Terminated  bool             `json:"terminated"`
 	SCMComplete bool             `json:"scm_complete"`
 	PRs         []SpawnOutcomePR `json:"prs"`
+}
+
+// SpawnOutcomeRequest joins AO's durable terminal/lifecycle facts back to the
+// spawn opportunity through the same stable trace id. OutcomeID is deterministic
+// so a receiver can make replay idempotent without AO persisting sidecar state.
+type SpawnOutcomeRequest struct {
+	Schema    string               `json:"schema"`
+	TraceID   string               `json:"trace_id"`
+	OutcomeID string               `json:"outcome_id"`
+	SessionID string               `json:"session_id"`
+	Outcome   SpawnOutcome         `json:"outcome"`
+	Evidence  SpawnOutcomeEvidence `json:"evidence"`
 }
 
 // IntelligenceAdvisor is deliberately orthogonal to AgentResolver. An
