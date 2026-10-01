@@ -3057,6 +3057,109 @@ func TestPRObservation_ConsecutiveMergeConflictsStayDeduplicated(t *testing.T) {
 // transient GitHub reports while it recomputes mergeability after a push or a
 // retarget. Treating unknown as "conflict resolved" would re-nudge on every
 // unknown → conflicting flap of a conflict that never went away.
+func TestPRObservation_BlockedProviderCleanReArmsMergeConflict(t *testing.T) {
+	tests := []struct {
+		name                  string
+		providerMergeable     string
+		providerMergeState    string
+	}{
+		{name: "github review blocked", providerMergeable: "MERGEABLE", providerMergeState: "BLOCKED"},
+		{name: "gitlab changes requested", providerMergeable: "can_be_merged", providerMergeState: "requested_changes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, st, msg := newManager()
+			st.sessions["mer-1"] = working("mer-1")
+			conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+			if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) != 1 {
+				t.Fatalf("first conflict nudges = %v", msg.msgs)
+			}
+
+			st.prs["mer-1"] = []domain.PullRequest{{
+				URL:                      "pr1",
+				SessionID:                "mer-1",
+				Mergeability:             domain.MergeBlocked,
+				Review:                   domain.ReviewRequired,
+				ProviderMergeable:        tt.providerMergeable,
+				ProviderMergeStateStatus: tt.providerMergeState,
+			}}
+			if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{
+				Fetched: true, URL: "pr1", Mergeability: domain.MergeBlocked,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) != 2 {
+				t.Fatalf("conflict returning after provider-clean blocked state should re-nudge, got %d: %v", len(msg.msgs), msg.msgs)
+			}
+		})
+	}
+}
+
+func TestPRObservation_BlockedWithoutProviderCleanProofDoesNotReArm(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+		t.Fatal(err)
+	}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL:                      "pr1",
+		SessionID:                "mer-1",
+		Mergeability:             domain.MergeBlocked,
+		ProviderMergeable:        "UNKNOWN",
+		ProviderMergeStateStatus: "BLOCKED",
+	}}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{
+		Fetched: true, URL: "pr1", Mergeability: domain.MergeBlocked,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("blocked without provider clean proof re-armed conflict nudge: %v", msg.msgs)
+	}
+}
+
+func TestPRObservation_BlockedProviderCleanReArmSurvivesRestart(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	firstMessages := &fakeMessenger{}
+	first := New(st, firstMessages)
+	if err := first.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+		t.Fatal(err)
+	}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL:                      "pr1",
+		SessionID:                "mer-1",
+		Mergeability:             domain.MergeBlocked,
+		Review:                   domain.ReviewRequired,
+		ProviderMergeable:        "MERGEABLE",
+		ProviderMergeStateStatus: "BLOCKED",
+	}}
+	if err := first.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{
+		Fetched: true, URL: "pr1", Mergeability: domain.MergeBlocked,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	restartedMessages := &fakeMessenger{}
+	if err := New(st, restartedMessages).ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
+		t.Fatal(err)
+	}
+	if len(restartedMessages.msgs) != 1 {
+		t.Fatalf("provider-clean blocked re-arm did not survive restart: %v", restartedMessages.msgs)
+	}
+}
+
 func TestPRObservation_UnknownMergeabilityDoesNotReArm(t *testing.T) {
 	for _, transient := range []domain.Mergeability{domain.MergeUnknown, domain.MergeBlocked, ""} {
 		t.Run(string(transient), func(t *testing.T) {
