@@ -94,6 +94,7 @@ type SpawnOutcomeEvidence struct {
 	Mode        string           `json:"mode"`
 	Model       string           `json:"model,omitempty"`
 	Activity    string           `json:"activity"`
+	Disposition string           `json:"disposition"`
 	Terminated  bool             `json:"terminated"`
 	SCMComplete bool             `json:"scm_complete"`
 	PRs         []SpawnOutcomePR `json:"prs"`
