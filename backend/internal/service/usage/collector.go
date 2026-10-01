@@ -86,7 +86,14 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	}
 	qwenRuntime, err := qwenRuntimeBaseDir(ctx, home, "")
 	if err != nil {
-		return SourceRoots{}, err
+		// Qwen is one optional usage source in a shared collector. A corrupt,
+		// unreadable, or otherwise unusable Qwen settings file must not disable
+		// Claude/Codex/Kimi accounting at daemon startup. Cancellation remains
+		// authoritative because the caller explicitly asked startup to stop.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return SourceRoots{}, ctxErr
+		}
+		qwenRuntime = qwenFallbackRuntimeBaseDir(home, "")
 	}
 	return SourceRoots{
 		ClaudeProjects: filepath.Join(home, ".claude", "projects"),
@@ -95,6 +102,11 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		KimiHome:       filepath.Join(dataDir, "kimi"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
 	}, nil
+}
+
+func qwenFallbackRuntimeBaseDir(home, workspace string) string {
+	qwenHome := qwenFallbackRuntimeBaseDir(home, workspace)
+	return qwenHome
 }
 
 func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, error) {
