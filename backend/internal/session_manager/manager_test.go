@@ -4125,6 +4125,101 @@ func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
 	}
 }
 
+func TestRestoreRecreatedWorkspaceSetupFailureRetriesAfterRestart(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{
+		ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(),
+		Config: domain.ProjectConfig{PostCreate: []string{"exit 7"}},
+	}
+	rec := domain.SessionRecord{
+		ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker,
+		CreatedAt: time.Unix(100, 0).UTC(),
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace},
+	}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil || !strings.Contains(err.Error(), "setup recreated workspace") {
+		t.Fatalf("first restore err = %v, want setup failure", err)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("failed setup should leave recreated workspace available for inspection: %v", err)
+	}
+
+	// Simulate a daemon restart. The filesystem now exists, so only the durable
+	// pending marker can prove setup still has to run.
+	m2, _, _, _ := newManager()
+	m2.dataDir = m.dataDir
+	m2.workspace = adapter
+	project.Config.PostCreate = []string{"echo setup > setup-ok"}
+	if _, err := m2.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatalf("retry restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "setup-ok")); err != nil {
+		t.Fatalf("retry skipped setup after prior failure: %v", err)
+	}
+	if _, err := os.Stat(m2.recreatedWorkspaceSetupPath(rec)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending setup marker survived successful retry: %v", err)
+	}
+}
+
+func TestRestoreWorkspaceProjectDoesNotConsumeRowsBeforePendingSetupSucceeds(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.dataDir = t.TempDir()
+	root := filepath.Join(t.TempDir(), "worktree")
+	child := filepath.Join(root, "services", "api")
+	if err := os.MkdirAll(child, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	project := domain.ProjectRecord{
+		ID: "mer", Path: t.TempDir(), Kind: domain.ProjectKindWorkspace,
+		Config: domain.ProjectConfig{PostCreate: []string{"exit 7"}},
+	}
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "services/api"}}
+	rec := domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		CreatedAt: time.Unix(200, 0).UTC(),
+		Metadata: domain.SessionMetadata{WorkspacePath: root, Branch: "ao/mer-1"},
+	}
+	st.worktrees[rec.ID] = []domain.SessionWorktreeRecord{
+		{SessionID: rec.ID, RepoName: domain.RootWorkspaceRepoName, Branch: rec.Metadata.Branch, WorktreePath: root, State: "removed"},
+		{SessionID: rec.ID, RepoName: "api", Branch: rec.Metadata.Branch, WorktreePath: child, State: "removed"},
+	}
+	if pending, err := m.prepareRecreatedWorkspaceSetup(rec, true); err != nil || !pending {
+		t.Fatalf("prepare pending setup = %v, %v", pending, err)
+	}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil || !strings.Contains(err.Error(), "setup recreated workspace") {
+		t.Fatalf("restore err = %v, want setup failure", err)
+	}
+	for _, row := range st.worktrees[rec.ID] {
+		if row.State != "removed" {
+			t.Fatalf("repo %s state = %q, want removed until setup succeeds", row.RepoName, row.State)
+		}
+	}
+
+	project.Config.PostCreate = []string{"echo setup > setup-ok"}
+	st.projects["mer"] = project
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatalf("retry restore: %v", err)
+	}
+	for _, row := range st.worktrees[rec.ID] {
+		if row.State != "active" {
+			t.Fatalf("repo %s state = %q, want active after setup succeeds", row.RepoName, row.State)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "setup-ok")); err != nil {
+		t.Fatalf("retry did not rerun setup: %v; workspace calls=%v", err, ws.calls)
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
