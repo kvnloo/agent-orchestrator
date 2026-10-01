@@ -83,3 +83,59 @@ func TestClientTimeoutIsBounded(t *testing.T) {
 		t.Fatal("expected timeout")
 	}
 }
+
+
+func TestClientObserveOutcome(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != spawnOutcomePath {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var in ports.SpawnOutcomeRequest
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		if in.TraceID != "ao-spawn-proj-1" || in.OutcomeID != "ao-outcome-proj-1-terminated" {
+			t.Fatalf("identity = %+v", in)
+		}
+		if !in.Terminated || !in.SCMComplete || len(in.PRs) != 1 || !in.PRs[0].Merged {
+			t.Fatalf("evidence = %+v", in)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.ObserveOutcome(context.Background(), ports.SpawnOutcomeRequest{
+		Schema:      ports.SpawnOutcomeSchema,
+		TraceID:     "ao-spawn-proj-1",
+		OutcomeID:   "ao-outcome-proj-1-terminated",
+		SessionID:   "proj-1",
+		ProjectID:   "proj",
+		Kind:        "worker",
+		Harness:     "codex",
+		Mode:        "tui",
+		Activity:    "idle",
+		Terminated:  true,
+		SCMComplete: true,
+		PRs: []ports.SpawnOutcomePR{{
+			URL: "https://github.com/example/repo/pull/1", Number: 1, Merged: true,
+			CI: "passing", Review: "approved", Mergeability: "mergeable",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientObserveOutcomeRejectsMissingIdentity(t *testing.T) {
+	client, err := New("http://127.0.0.1:1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ObserveOutcome(context.Background(), ports.SpawnOutcomeRequest{Schema: ports.SpawnOutcomeSchema}); err == nil {
+		t.Fatal("expected identity validation failure")
+	}
+}
