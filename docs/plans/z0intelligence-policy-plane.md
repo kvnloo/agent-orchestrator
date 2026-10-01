@@ -45,11 +45,11 @@ from prompt contents.
 
 ## P1a implemented on the outcome-ledger stack
 
-Terminal AO outcomes are projected back to z0intelligence as
-`ao.z0int.outcome.v1` using the same `ao-spawn-<session-id>` trace identity as
-the spawn decision. A deterministic `ao-outcome-<session-id>-terminated`
-outcome id lets the receiver make replay idempotent without AO persisting
-sidecar receipt state.
+AO outcomes are projected back to z0intelligence as `ao.z0int.outcome.v1`
+using the same `ao-spawn-<session-id>` trace identity as the spawn decision.
+Deterministic outcome ids distinguish durable termination from an early
+`seed_deleted` rollback, so even failures that intentionally remove the seed
+row remain joinable without AO persisting sidecar receipt state.
 
 The wire intentionally separates the generic z0 Outcome from AO-specific
 evidence. Durable termination alone does not claim execution completion or
@@ -59,7 +59,7 @@ verified success. A merged PR emits `pr_merged=true` with
 
 The bounded evidence envelope contains:
 - AO session/project/role/harness/mode/model identity
-- terminal flag + last normalized activity state
+- disposition (`terminated` or `seed_deleted`) + terminal flag + last normalized activity state
 - up to 8 attributed PRs (newest first)
 - draft/merged/closed, CI, review, mergeability, unresolved/external-review facts
 - PR URL/number/head SHA for evidence joins
@@ -72,8 +72,11 @@ payloads.
 Outcome delivery is still shadow-only and fail-open with the same 300 ms budget.
 AO re-reads canonical state after Kill/replacement termination and emits only
 when `is_terminated` is durable. Failed-spawn paths that preserve a terminal
-session also emit evidence. `scm_complete=false` distinguishes a missing/failed
-SCM projection from a legitimately empty PR set.
+session also emit evidence. If an early rollback successfully deletes a seed
+row, AO emits `seed_deleted` only after that delete succeeds; it claims no
+execution completion and leaves SCM completeness false. `scm_complete=false`
+otherwise distinguishes missing/truncated SCM projection from a legitimately
+complete PR set.
 
 ## Promotion sequence
 
