@@ -704,6 +704,7 @@ func Run() error {
 			},
 			ReconcilePath: usageCollector.ReconcilePath,
 		})
+		usageCollector.OnWatchRootResolved(usagePipeline.AddWatchRoot)
 		// Safety-net reconcile tick. The pipeline is event-driven otherwise:
 		// a silently lost fsnotify watch or a resume transcript that arrived
 		// without a hook would otherwise never be re-checked. NotifySourcesChanged
