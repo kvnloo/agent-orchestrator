@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator } from "./support/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
 const sessionId = "chat-message-overflow";
