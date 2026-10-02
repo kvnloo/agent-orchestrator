@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/test";
 import { openInspector } from "./support/open-inspector";
 
 // dev:web (VITE_NO_ELECTRON=1) serves lib/mock-data.ts. Use stable session URLs

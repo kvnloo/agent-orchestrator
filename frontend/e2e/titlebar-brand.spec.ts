@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./support/test";
 
 // Regression guard for #366 (macOS): the sidebar's "Agent Orchestrator" brand
 // must never sit under the TitlebarNav cluster, and the wordmark must stay

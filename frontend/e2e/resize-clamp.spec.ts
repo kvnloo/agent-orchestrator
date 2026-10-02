@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./support/test";
 import { openInspector } from "./support/open-inspector";
 
 // Dragging a panel edge must clamp at the panel's minimum width — never
