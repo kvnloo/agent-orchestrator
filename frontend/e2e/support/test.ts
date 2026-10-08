@@ -58,7 +58,12 @@ function isBrowserNetworkDiagnostic(message: ConsoleMessage): boolean {
 }
 
 function gateErrorMessage(events: RendererErrorEvent[]): string {
-	const lines = events.map((event) => `- ${event.kind}: ${event.message}`);
+	const lines = events.map((event) => {
+		const source = event.location?.url
+			? ` @ ${event.location.url}:${event.location.lineNumber ?? 0}:${event.location.columnNumber ?? 0}`
+			: "";
+		return `- ${event.kind}: ${event.message}${source}`;
+	});
 	return [
 		"Unexpected renderer errors detected by the AO Playwright gate.",
 		...lines,
