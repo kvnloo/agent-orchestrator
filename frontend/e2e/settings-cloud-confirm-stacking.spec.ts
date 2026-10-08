@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
 // REGRESSION: settings-dialog stacking vs ConfirmDialog (#5873, then #5944).

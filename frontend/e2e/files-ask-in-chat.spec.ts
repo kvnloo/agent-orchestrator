@@ -1,5 +1,5 @@
 import path from "node:path";
-import { _electron as electron, expect, test as base, type Locator, type Page } from "@playwright/test";
+import { _electron as electron, expect, test as base, type Locator, type Page } from "./support/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent, installFakeBridge } from "./support/fake-bridge";
 import { openInspector } from "./support/open-inspector";
