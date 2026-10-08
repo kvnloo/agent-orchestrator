@@ -1562,6 +1562,20 @@ func idleControllerState(record domain.SessionRecord) ports.ChatControllerState 
 	return ports.ChatControllerStopped
 }
 
+// preConversationControllerState reports the durable startup fact before
+// the controller creates its first conversation row. Nothing has stopped
+// in this state. Preserve explicit terminal facts and the newer hibernation
+// state rather than hiding them behind a startup grace period.
+func preConversationControllerState(record domain.SessionRecord) ports.ChatControllerState {
+	if record.IsTerminated || record.Activity.State == domain.ActivityExited {
+		return ports.ChatControllerStopped
+	}
+	if record.HibernatedAt != nil {
+		return ports.ChatControllerHibernated
+	}
+	return ports.ChatControllerConnecting
+}
+
 // withDispatchingTurnRunning reports the turn being dispatched as running. Its row
 // stays queued until the provider binds it, but a client reads queued as "waiting
 // behind other work", which is false for a message sent to an idle agent.
@@ -1603,7 +1617,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: preConversationControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -1705,7 +1719,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: preConversationControllerState(record),
 		}, nil
 	}
 	if err != nil {
