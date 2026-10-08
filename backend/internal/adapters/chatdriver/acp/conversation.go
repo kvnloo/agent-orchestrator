@@ -479,6 +479,11 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
 			return nil
 		}
+		if option.ID == "model" {
+			if offered, known := c.configOptionOffers("model", option.Value); known && !offered {
+				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, option.Value)
+			}
+		}
 		resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
 			ValueId: &acpsdk.SetSessionConfigOptionValueId{
 				SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
