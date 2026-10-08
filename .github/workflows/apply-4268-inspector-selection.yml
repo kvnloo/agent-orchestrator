@@ -1,0 +1,65 @@
+name: Apply 4268 inspector selection fix
+
+on:
+  push:
+    branches:
+      - fix/4268-inspector-copy-selectable
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/4268-inspector-copy-selectable
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/product-ui/package-lock.json
+      - name: Install product UI dependencies
+        working-directory: packages/product-ui
+        run: npm ci
+      - name: Opt static inspector copy into selection
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("packages/product-ui/src/SessionInspectorView.tsx")
+          source = path.read_text()
+          replacements = {
+              'export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";':
+                  'export const inspectorEmptyClass = "select-text text-xs text-settings-muted leading-normal";',
+              '{title ? <span>{title}</span> : <span />}':
+                  '{title ? <span className="select-text">{title}</span> : <span />}',
+              '<div className="overflow-hidden rounded-settings-row bg-settings-row px-3.5 py-1.5">':
+                  '<div className="select-text overflow-hidden rounded-settings-row bg-settings-row px-3.5 py-1.5">',
+              '<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">':
+                  '<article className="min-w-0 w-full select-text rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">',
+              '<div className="flex flex-col">\n\t\t\t{events.map((event, index) => (':
+                  '<div className="flex select-text flex-col">\n\t\t\t{events.map((event, index) => (',
+          }
+          for old, new in replacements.items():
+              if source.count(old) != 1:
+                  raise SystemExit(f"selection anchor count for {old[:60]!r} was {source.count(old)}, want 1")
+              source = source.replace(old, new)
+          path.write_text(source)
+          Path(".github/workflows/apply-4268-inspector-selection.yml").unlink()
+          PY
+      - name: Run focused product UI tests
+        working-directory: packages/product-ui
+        run: npm test -- src/SessionInspectorView.selectable.test.tsx src/SessionInspectorView.test.tsx
+      - name: Typecheck product UI
+        working-directory: packages/product-ui
+        run: npm run typecheck
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/product-ui/src/SessionInspectorView.tsx packages/product-ui/src/SessionInspectorView.selectable.test.tsx .github/workflows/apply-4268-inspector-selection.yml
+          git commit -m "fix(inspector): make static summary copy selectable"
+          git push origin HEAD:fix/4268-inspector-copy-selectable
