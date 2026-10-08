@@ -1,0 +1,123 @@
+name: Apply 5487 Chat fallback refresh
+
+on:
+  push:
+    branches:
+      - fix/5487-chat-default-permission-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5487-chat-default-permission-fallback
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Port the assigned upstream branch onto current main
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          acp = Path("backend/internal/adapters/chatdriver/acp/driver.go")
+          source = acp.read_text()
+          anchor = '''func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
+          \tif d.cfg.Probe == nil || d.cfg.Launch == nil {
+          \t\treturn nil, fmt.Errorf("%w: incomplete ACP binding", ports.ErrChatDriverUnavailable)
+          \t}
+          \tif err := d.cfg.Probe(ctx); err != nil {
+          \t\treturn nil, err
+          \t}
+          \treturn cloneCapabilities(d.cfg.Capabilities), nil
+          }'''
+          replacement = anchor + '''
+
+          // ValidateLaunch applies provider-specific permission validation at
+          // admission time. The complete model/effort validation still runs in
+          // Start after AO resolves those settings.
+          func (d *Driver) ValidateLaunch(permissions ports.PermissionMode) error {
+          \tif d.cfg.ValidateTurnSettings == nil {
+          \t\treturn nil
+          \t}
+          \treturn d.cfg.ValidateTurnSettings(permissions, ports.ChatTurnSettings{Approval: permissions})
+          }'''
+          if source.count(anchor) != 1:
+              raise SystemExit("ACP Probe anchor did not match exactly once")
+          acp.write_text(source.replace(anchor, replacement))
+
+          service = Path("backend/internal/service/chat/service.go")
+          source = service.read_text()
+          old = '''\tcaps, err := s.driverCapabilities(ctx, harness, driver)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \treturn capabilityAdmissionError(harness, caps, permissions)
+          }'''
+          new = '''\tcaps, err := s.driverCapabilities(ctx, harness, driver)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tif err := capabilityAdmissionError(harness, caps, permissions); err != nil {
+          \t\treturn err
+          \t}
+          \tif validator, ok := driver.(ports.ChatLaunchValidator); ok {
+          \t\treturn validator.ValidateLaunch(permissions)
+          \t}
+          \treturn nil
+          }'''
+          if source.count(old) != 1:
+              raise SystemExit("PreflightChat anchor did not match exactly once")
+          service.write_text(source.replace(old, new))
+
+          manager = Path("backend/internal/session_manager/manager.go")
+          source = manager.read_text()
+          old = '''\t\t\tfallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatDriverUnavailable) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatDriverIncompatible) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatAuthRequired)'''
+          new = '''\t\t\tfallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatDriverUnavailable) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatDriverIncompatible) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatAuthRequired) ||
+          \t\t\t\terrors.Is(err, ports.ErrChatPermissionModeUnsupported)'''
+          if source.count(old) != 1:
+              raise SystemExit("fallback allowlist anchor did not match exactly once")
+          manager.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-5487-chat-fallback.yml").unlink()
+          PY
+          gofmt -w \
+            backend/internal/adapters/chatdriver/acp/driver.go \
+            backend/internal/ports/chat_launch_validation.go \
+            backend/internal/service/chat/service.go \
+            backend/internal/service/chat/launch_validation_test.go \
+            backend/internal/session_manager/manager.go \
+            backend/internal/session_manager/chat_default_permission_fallback_test.go
+      - name: Run focused regressions
+        working-directory: backend
+        run: |
+          go test ./internal/service/chat -run TestPreflightChatRunsProviderLaunchValidation
+          go test ./internal/session_manager -run 'TestDefaultChatSpawnFallsBackToTUIForUnsupportedPermissionMode|TestExplicitChatSpawnDoesNotFallbackForUnsupportedPermissionMode'
+      - name: Run owning package suites
+        working-directory: backend
+        run: |
+          go test ./internal/adapters/chatdriver/acp ./internal/adapters/chatdriver/kimiacp ./internal/service/chat ./internal/session_manager
+      - name: Commit refresh and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            backend/internal/adapters/chatdriver/acp/driver.go \
+            backend/internal/ports/chat_launch_validation.go \
+            backend/internal/service/chat/service.go \
+            backend/internal/service/chat/launch_validation_test.go \
+            backend/internal/session_manager/manager.go \
+            backend/internal/session_manager/chat_default_permission_fallback_test.go \
+            .github/workflows/apply-5487-chat-fallback.yml
+          git commit -m "fix(chat): fall back when default Chat permissions are unsupported"
+          git push origin HEAD:fix/5487-chat-default-permission-fallback
