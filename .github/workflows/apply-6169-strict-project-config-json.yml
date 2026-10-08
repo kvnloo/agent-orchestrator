@@ -1,0 +1,78 @@
+name: Apply 6169 strict project config JSON fix
+
+on:
+  push:
+    branches:
+      - fix/6169-reject-unknown-project-config-json
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6169-reject-unknown-project-config-json
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Reject unknown and trailing project config JSON
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/internal/cli/project.go")
+          source = path.read_text()
+
+          old_import = '''\t"fmt"
+          \t"net/url"'''
+          new_import = '''\t"fmt"
+          \t"io"
+          \t"net/url"'''
+          if source.count(old_import) != 1:
+              raise SystemExit("import anchor did not match exactly once")
+          source = source.replace(old_import, new_import)
+
+          old = '''\tif opts.configJSON != "" {
+          \t\tvar cfg projectConfig
+          \t\tif err := json.Unmarshal([]byte(opts.configJSON), &cfg); err != nil {
+          \t\t\treturn projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
+          \t\t}
+          \t\treturn cfg, nil
+          \t}'''
+          new = '''\tif opts.configJSON != "" {
+          \t\tvar cfg projectConfig
+          \t\tdecoder := json.NewDecoder(strings.NewReader(opts.configJSON))
+          \t\tdecoder.DisallowUnknownFields()
+          \t\tif err := decoder.Decode(&cfg); err != nil {
+          \t\t\treturn projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid project config object: %w", err)}
+          \t\t}
+          \t\tvar trailing any
+          \t\tif err := decoder.Decode(&trailing); err != io.EOF {
+          \t\t\tif err == nil {
+          \t\t\t\terr = errors.New("multiple JSON values")
+          \t\t\t}
+          \t\t\treturn projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid project config object: %w", err)}
+          \t\t}
+          \t\treturn cfg, nil
+          \t}'''
+          if source.count(old) != 1:
+              raise SystemExit("config JSON decoder anchor did not match exactly once")
+          source = source.replace(old, new)
+          path.write_text(source)
+          Path(".github/workflows/apply-6169-strict-project-config-json.yml").unlink()
+          PY
+          gofmt -w backend/internal/cli/project.go backend/internal/cli/project_config_unknown_fields_test.go
+      - name: Run focused regressions
+        working-directory: backend
+        run: go test ./internal/cli -run 'TestProjectSetConfigRejectsUnknownJSONFieldBeforeRequest|TestBuildProjectConfigRejectsNestedUnknownJSONField|TestProjectSetConfig_ReviewerJSON'
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/cli/project.go backend/internal/cli/project_config_unknown_fields_test.go .github/workflows/apply-6169-strict-project-config-json.yml
+          git commit -m "fix(cli): reject unknown project config JSON keys"
+          git push origin HEAD:fix/6169-reject-unknown-project-config-json
