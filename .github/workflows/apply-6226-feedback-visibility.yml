@@ -1,0 +1,88 @@
+name: Apply 6226 feedback visibility fix
+
+on:
+  push:
+    branches:
+      - fix/6226-feedback-composer-visible
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6226-feedback-composer-visible
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install product UI dependencies
+        working-directory: packages/product-ui
+        run: npm ci
+      - name: Anchor whole-file feedback to the sticky toolbar
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("frontend/src/renderer/components/FileContentPane.tsx")
+          source = path.read_text()
+
+          toolbar_class = 'className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1"'
+          relative_toolbar_class = 'className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 relative"'
+          if source.count(toolbar_class) != 1:
+              raise SystemExit("compact toolbar class did not match exactly once")
+          source = source.replace(toolbar_class, relative_toolbar_class)
+
+          marker = '\n\t// Both the Files panel and a centre file tab use the compact icon toolbar.'
+          if source.count(marker) != 1:
+              raise SystemExit("toolbar marker did not match exactly once")
+          prefix, suffix = source.split(marker, 1)
+          close = '\t\t</div>\n\t);'
+          close_at = prefix.rfind(close)
+          if close_at < 0:
+              raise SystemExit("compact toolbar closing tag was not found")
+          anchored_composer = '''\t\t\t{wholeFileAnnotationTarget ? (
+          \t\t\t\t<div className="absolute right-3 top-full z-50 w-[min(32rem,calc(100%-1.5rem))]">
+          \t\t\t\t\t<FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} />
+          \t\t\t\t</div>
+          \t\t\t) : null}
+          '''
+          prefix = prefix[:close_at] + anchored_composer + prefix[close_at:]
+          source = prefix + marker + suffix
+
+          old_toolbar_node = '''\tconst toolbarNode = (
+          \t\t<>
+          \t\t\t{compactTabs}
+          \t\t\t{wholeFileAnnotationTarget ? <FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /> : null}
+          \t\t</>
+          \t);'''
+          if source.count(old_toolbar_node) != 1:
+              raise SystemExit("old whole-file composer placement did not match exactly once")
+          source = source.replace(old_toolbar_node, '\tconst toolbarNode = compactTabs;')
+
+          path.write_text(source)
+          Path(".github/workflows/apply-6226-feedback-visibility.yml").unlink()
+          PY
+      - name: Typecheck E2E suite
+        working-directory: frontend
+        run: npm run typecheck:e2e
+      - name: Run focused browser regression
+        working-directory: frontend
+        run: CI=true npx playwright test e2e/file-feedback-visibility.spec.ts
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/renderer/components/FileContentPane.tsx frontend/e2e/file-feedback-visibility.spec.ts .github/workflows/apply-6226-feedback-visibility.yml
+          git commit -m "fix(files): keep whole-file feedback visible while scrolled"
+          git push origin HEAD:fix/6226-feedback-composer-visible
