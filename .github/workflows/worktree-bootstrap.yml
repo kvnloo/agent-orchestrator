@@ -1,0 +1,61 @@
+name: Worktree bootstrap
+
+on:
+  pull_request:
+    paths:
+      - ".node-version"
+      - ".nvmrc"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/bootstrap-worktree.mjs"
+      - "scripts/bootstrap-worktree.test.mjs"
+      - ".github/workflows/worktree-bootstrap.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".node-version"
+      - ".nvmrc"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/bootstrap-worktree.mjs"
+      - "scripts/bootstrap-worktree.test.mjs"
+      - ".github/workflows/worktree-bootstrap.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test bootstrap contract
+        run: node --test scripts/bootstrap-worktree.test.mjs
+      - name: Validate runtime and lockfiles
+        run: npm run bootstrap:frontend -- --check
+
+  linux-install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+            frontend/src/docs/package-lock.json
+            packages/cloud-client/package-lock.json
+            packages/product-ui/package-lock.json
+      - name: Bootstrap a fresh checkout
+        run: npm run bootstrap:frontend
+      - name: Prove unchanged rerun uses verified stamps
+        run: npm run bootstrap:frontend
