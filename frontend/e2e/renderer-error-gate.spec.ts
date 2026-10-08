@@ -32,6 +32,24 @@ test.fail("renderer error gate rejects error-level console output", async ({ pag
 	await page.waitForTimeout(10);
 });
 
+const derivedPageTest = test.extend({
+	page: async ({ context }, use) => {
+		const page = await context.newPage();
+		await use(page);
+		await page.close();
+	},
+});
+
+derivedPageTest.fail("renderer error gate survives a derived page fixture", async ({ page }) => {
+	await page.setContent("<main>derived page fixture</main>");
+	await page.evaluate(() => {
+		setTimeout(() => {
+			throw new Error("AO synthetic derived-page gate");
+		}, 0);
+	});
+	await page.waitForTimeout(50);
+});
+
 test.describe("documented exact renderer error allowance", () => {
 	test.use({
 		rendererErrorAllowlist: [
