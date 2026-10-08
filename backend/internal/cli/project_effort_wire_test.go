@@ -25,7 +25,7 @@ func assertProjectEffortWire(t *testing.T, data []byte) {
 	if cfg.Orchestrator.AgentConfig.Effort != "high" {
 		t.Errorf("orchestrator effort = %q, want high", cfg.Orchestrator.AgentConfig.Effort)
 	}
-	if len(cfg.Reviewers) != 1 || cfg.Reviewers[0].AgentConfig == nil || cfg.Reviewers[0].AgentConfig.Effort != "medium" {
+	if len(cfg.Reviewers) != 1 || cfg.Reviewers[0].AgentConfig.Effort != "medium" {
 		t.Errorf("reviewer effort was lost: %s", data)
 	}
 }
