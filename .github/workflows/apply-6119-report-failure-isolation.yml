@@ -1,0 +1,108 @@
+name: Apply 6119 report failure-isolation fix
+
+on:
+  push:
+    branches:
+      - fix/6119-report-delivery-failure-isolation
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6119-report-delivery-failure-isolation
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Back off failed batches and continue newer due work
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/internal/service/report/coordinator.go")
+          source = path.read_text()
+
+          old_run_due = '''func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
+          \tif c == nil || c.store == nil || c.delivery == nil {
+          \t\treturn -1, errors.New("report coordinator dependencies are required")
+          \t}
+          \tc.mu.Lock()
+          \tdefer c.mu.Unlock()
+          \tfor {
+          \t\tpending, err := c.store.ListPendingReportSchedule(ctx, 1)
+          \t\tif err != nil {
+          \t\t\treturn c.retryDelay, err
+          \t\t}
+          \t\tif len(pending) == 0 {
+          \t\t\treturn -1, nil
+          \t\t}
+          \t\tnow := c.now().UTC()
+          \t\tif pending[0].AvailableAt.After(now) {
+          \t\t\treturn pending[0].AvailableAt.Sub(now), nil
+          \t\t}
+          \t\tif err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
+          \t\t\treturn c.retryDelay, err
+          \t\t}
+          \t}
+          }'''
+          new_run_due = '''func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
+          \tif c == nil || c.store == nil || c.delivery == nil {
+          \t\treturn -1, errors.New("report coordinator dependencies are required")
+          \t}
+          \tc.mu.Lock()
+          \tdefer c.mu.Unlock()
+          \tvar deferred []error
+          \tfor {
+          \t\tpending, err := c.store.ListPendingReportSchedule(ctx, 1)
+          \t\tif err != nil {
+          \t\t\treturn c.retryDelay, joinReportDeliveryErrors(deferred, err)
+          \t\t}
+          \t\tif len(pending) == 0 {
+          \t\t\treturn -1, errors.Join(deferred...)
+          \t\t}
+          \t\tnow := c.now().UTC()
+          \t\tif pending[0].AvailableAt.After(now) {
+          \t\t\treturn pending[0].AvailableAt.Sub(now), errors.Join(deferred...)
+          \t\t}
+          \t\tif err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
+          \t\t\tif errors.Is(err, errReportBatchDeferred) {
+          \t\t\t\tdeferred = append(deferred, err)
+          \t\t\t\tcontinue
+          \t\t\t}
+          \t\t\treturn c.retryDelay, joinReportDeliveryErrors(deferred, err)
+          \t\t}
+          \t}
+          }'''
+          if source.count(old_run_due) != 1:
+              raise SystemExit("RunDue anchor did not match exactly once")
+          source = source.replace(old_run_due, new_run_due)
+
+          replacements = {
+              'return c.release(ctx, batch, acquireErr)': 'return c.deferFailure(ctx, batch, acquireErr)',
+              'return c.release(ctx, batch, interruptErr)': 'return c.deferFailure(ctx, batch, interruptErr)',
+              'return c.release(ctx, batch, err)': 'return c.deferFailure(ctx, batch, err)',
+          }
+          for old, new in replacements.items():
+              if source.count(old) != 1:
+                  raise SystemExit(f"delivery failure anchor count for {old!r} was {source.count(old)}, want 1")
+              source = source.replace(old, new)
+
+          path.write_text(source)
+          Path(".github/workflows/apply-6119-report-failure-isolation.yml").unlink()
+          PY
+          gofmt -w backend/internal/service/report/coordinator.go backend/internal/service/report/failure_backoff.go backend/internal/service/report/failure_isolation_test.go
+      - name: Run focused report coordinator tests
+        working-directory: backend
+        run: go test ./internal/service/report -run 'TestCoordinatorFailureDoesNotStarveNewerReportBatch|TestCoordinatorFixedFallbackAndSettlementBatch|TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator'
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/service/report/coordinator.go backend/internal/service/report/failure_backoff.go backend/internal/service/report/failure_isolation_test.go .github/workflows/apply-6119-report-failure-isolation.yml
+          git commit -m "fix(report): isolate failed batches from newer delivery"
+          git push origin HEAD:fix/6119-report-delivery-failure-isolation
