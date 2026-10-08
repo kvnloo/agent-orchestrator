@@ -1,0 +1,83 @@
+name: Apply 5474 GitHub check patch
+
+on:
+  push:
+    branches:
+      - fix/5474-superseded-cancelled-check-runs
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5474-superseded-cancelled-check-runs
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Apply workflow-run identity projection
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          check_fields = '''... on CheckRun { name status conclusion detailsUrl url databaseId }'''
+          enriched_fields = '''... on CheckRun { name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ databaseId runNumber runAttempt workflow{ databaseId } } } }'''
+
+          provider = Path("backend/internal/adapters/scm/github/provider.go")
+          source = provider.read_text()
+          if source.count(check_fields) != 1:
+              raise SystemExit(f"provider CheckRun field count={source.count(check_fields)}, want 1")
+          source = source.replace(check_fields, enriched_fields)
+          old = '''\trawNodes := nodes(contexts["nodes"])
+          \tif len(rawNodes) == 0 {'''
+          new = '''\trawNodes := filterSupersededWorkflowChecks(nodes(contexts["nodes"]))
+          \tif len(rawNodes) == 0 {'''
+          if source.count(old) != 1:
+              raise SystemExit("provider summary anchor did not match exactly once")
+          provider.write_text(source.replace(old, new))
+
+          observer = Path("backend/internal/adapters/scm/github/observer_provider.go")
+          source = observer.read_text()
+          if source.count(check_fields) != 2:
+              raise SystemExit(f"observer CheckRun field count={source.count(check_fields)}, want 2")
+          source = source.replace(check_fields, enriched_fields)
+          old = '''func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
+          \troll := statusRollup(pr)
+          \tif roll == nil {
+          \t\treturn domain.CIUnknown
+          \t}
+          \treturn mapRollupState(str(roll["state"]))
+          }'''
+          new = '''func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
+          \t// Derive the summary from the same filtered nodes used for details.
+          \t// GitHub's aggregate state still includes superseded workflow runs.
+          \treturn ciSummaryFromGraphQL(pr)
+          }'''
+          if source.count(old) != 1:
+              raise SystemExit("observer summary anchor did not match exactly once")
+          source = source.replace(old, new)
+          old = '''\trawNodes := nodes(contexts["nodes"])
+          \tout := make([]ports.SCMCheckObservation, 0, len(rawNodes))'''
+          new = '''\trawNodes := filterSupersededWorkflowChecks(nodes(contexts["nodes"]))
+          \tout := make([]ports.SCMCheckObservation, 0, len(rawNodes))'''
+          if source.count(old) != 1:
+              raise SystemExit("observer details anchor did not match exactly once")
+          observer.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-5474-patch.yml").unlink()
+          PY
+          gofmt -w backend/internal/adapters/scm/github/check_run_dedup.go backend/internal/adapters/scm/github/superseded_checks_test.go backend/internal/adapters/scm/github/provider.go backend/internal/adapters/scm/github/observer_provider.go
+      - name: Run focused GitHub SCM tests
+        working-directory: backend
+        run: go test ./internal/adapters/scm/github -run 'TestCISummary'
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/adapters/scm/github/check_run_dedup.go backend/internal/adapters/scm/github/superseded_checks_test.go backend/internal/adapters/scm/github/provider.go backend/internal/adapters/scm/github/observer_provider.go .github/workflows/apply-5474-patch.yml
+          git commit -m "fix(github): ignore superseded workflow check runs"
+          git push origin HEAD:fix/5474-superseded-cancelled-check-runs
