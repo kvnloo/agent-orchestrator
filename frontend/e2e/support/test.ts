@@ -31,6 +31,7 @@ type RendererBrowserDiagnostic = {
 
 type RendererErrorFixtures = {
 	rendererErrorAllowlist: RendererErrorAllowance[];
+	_rendererErrorGate: void;
 };
 
 function validateAllowance(allowance: RendererErrorAllowance): void {
@@ -81,64 +82,69 @@ async function attachGateEvidence(
 }
 
 /**
- * Shared renderer E2E fixture.
+ * Shared renderer E2E gate.
  *
- * Unexpected uncaught page errors and error-level console messages fail the
- * owning test. Exceptions are exact-message-only and must cite an AO issue;
- * broad ResizeObserver/xterm suppression is deliberately impossible here.
+ * This is an auto fixture rather than a page override so specs that provide
+ * their own page fixture (including the native-Electron path) still inherit
+ * the gate. Unexpected uncaught page errors and error-level console messages
+ * fail the owning test. Exceptions are exact-message-only and must cite an AO
+ * issue; broad ResizeObserver/xterm suppression is deliberately impossible.
  */
 export const test = base.extend<RendererErrorFixtures>({
 	rendererErrorAllowlist: [[], { option: true }],
-	page: async ({ page, rendererErrorAllowlist }, use, testInfo) => {
-		for (const allowance of rendererErrorAllowlist) validateAllowance(allowance);
+	_rendererErrorGate: [
+		async ({ page, rendererErrorAllowlist }, use, testInfo) => {
+			for (const allowance of rendererErrorAllowlist) validateAllowance(allowance);
 
-		const events: RendererErrorEvent[] = [];
-		const browserDiagnostics: RendererBrowserDiagnostic[] = [];
-		const onPageError = (error: Error) => {
-			events.push({
-				kind: "pageerror",
-				message: error.message,
-				stack: error.stack,
-			});
-		};
-		const onConsole = (message: ConsoleMessage) => {
-			if (message.type() !== "error") return;
-			if (isBrowserNetworkDiagnostic(message)) {
-				browserDiagnostics.push({
-					kind: "network",
+			const events: RendererErrorEvent[] = [];
+			const browserDiagnostics: RendererBrowserDiagnostic[] = [];
+			const onPageError = (error: Error) => {
+				events.push({
+					kind: "pageerror",
+					message: error.message,
+					stack: error.stack,
+				});
+			};
+			const onConsole = (message: ConsoleMessage) => {
+				if (message.type() !== "error") return;
+				if (isBrowserNetworkDiagnostic(message)) {
+					browserDiagnostics.push({
+						kind: "network",
+						message: message.text(),
+						location: message.location(),
+					});
+					return;
+				}
+				events.push({
+					kind: "console",
 					message: message.text(),
 					location: message.location(),
 				});
-				return;
+			};
+
+			page.on("pageerror", onPageError);
+			page.on("console", onConsole);
+			try {
+				await use();
+			} finally {
+				page.off("pageerror", onPageError);
+				page.off("console", onConsole);
 			}
-			events.push({
-				kind: "console",
-				message: message.text(),
-				location: message.location(),
-			});
-		};
 
-		page.on("pageerror", onPageError);
-		page.on("console", onConsole);
-		try {
-			await use(page);
-		} finally {
-			page.off("pageerror", onPageError);
-			page.off("console", onConsole);
-		}
+			const unexpected = events.filter((event) => !allowed(event, rendererErrorAllowlist));
+			if (unexpected.length === 0) return;
 
-		const unexpected = events.filter((event) => !allowed(event, rendererErrorAllowlist));
-		if (unexpected.length === 0) return;
+			await attachGateEvidence(testInfo, events, unexpected, rendererErrorAllowlist, browserDiagnostics);
 
-		await attachGateEvidence(testInfo, events, unexpected, rendererErrorAllowlist, browserDiagnostics);
+			// Preserve the original assertion/fixture failure when one already exists.
+			// The renderer evidence remains attached, but the gate does not replace the
+			// primary failure with a teardown error.
+			if (testInfo.errors.length > 0) return;
 
-		// Preserve the original assertion/fixture failure when one already exists.
-		// The renderer evidence remains attached, but the gate does not replace the
-		// primary failure with a teardown error.
-		if (testInfo.errors.length > 0) return;
-
-		throw new Error(gateErrorMessage(unexpected));
-	},
+			throw new Error(gateErrorMessage(unexpected));
+		},
+		{ auto: true },
+	],
 });
 
 export { expect, _electron };
