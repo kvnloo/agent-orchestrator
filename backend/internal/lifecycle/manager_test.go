@@ -3015,6 +3015,43 @@ func TestPRObservation_MergeConflictNudgesAgent(t *testing.T) {
 	}
 }
 
+func TestSCMObservation_MergeConflictReArmsWhenProviderHeadIsMergeableButAOBlocked(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+
+	apply := func(state domain.Mergeability, providerMergeable, providerMergeState string) {
+		t.Helper()
+		obs := ports.SCMObservation{
+			Fetched: true,
+			PR: ports.SCMPRObservation{
+				URL:                      "pr1",
+				ProviderMergeable:        providerMergeable,
+				ProviderMergeStateStatus: providerMergeState,
+			},
+			Mergeability: ports.SCMMergeabilityObservation{State: string(state)},
+		}
+		if err := m.ApplySCMObservation(ctx, "mer-1", obs); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	apply(domain.MergeConflicting, "CONFLICTING", "DIRTY")
+	if len(msg.msgs) != 1 {
+		t.Fatalf("first conflict should nudge once, got %v", msg.msgs)
+	}
+
+	// GitHub can report a conflict-free head as MERGEABLE while its merge state
+	// remains BLOCKED for a required review. AO normalizes that combination to
+	// blocked, but the positive provider mergeability fact must still re-arm the
+	// conflict nudge for a later base-branch conflict (#6104).
+	apply(domain.MergeBlocked, "MERGEABLE", "BLOCKED")
+	apply(domain.MergeConflicting, "CONFLICTING", "DIRTY")
+
+	if len(msg.msgs) != 2 {
+		t.Fatalf("provider-confirmed clean head should re-arm a later conflict, got %d nudges: %v", len(msg.msgs), msg.msgs)
+	}
+}
+
 // TestPRObservation_MergeConflictReArmsAfterConflictClears is the regression
 // test for #4528: AO notified on the first conflict but never again, because
 // the "merge-conflict:<url>" = "conflicting" signature sendOnce persists was
