@@ -1,0 +1,86 @@
+name: Apply 5989 Claude alias-label fix
+
+on:
+  push:
+    branches:
+      - fix/5989-claude-latest-model-alias-label
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5989-claude-latest-model-alias-label
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Preserve concrete version labels for provider aliases
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("frontend/src/renderer/components/chat/TurnSettingsBar.tsx")
+          source = path.read_text()
+
+          anchor = '''function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {'''
+          helper = '''function concreteModelAliasLabel(choice: ChatConfigOption["choices"][number]): string | undefined {
+          \tconst detail = choice.description?.split(/\\s*·\\s*/, 1)[0]?.trim();
+          \tif (!detail || detail.toLowerCase() === choice.name.trim().toLowerCase()) return undefined;
+          \treturn detail;
+          }
+
+          function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {'''
+          if source.count(anchor) != 1:
+              raise SystemExit("resolveImplicitChoice anchor did not match exactly once")
+          source = source.replace(anchor, helper)
+
+          old = '''\tconst followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
+          \tif (concrete && mapped.currentValue !== concrete.value) {'''
+          new = '''\tconst followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
+          \tconst versionedAliasLabel = concrete && isModelOption(mapped)
+          \t\t? concreteModelAliasLabel(concrete)
+          \t\t: undefined;
+          \tif (concrete && versionedAliasLabel) {
+          \t\tconst keepImplicit = mapped.currentValue === implicit.value;
+          \t\treturn {
+          \t\t\t...mapped,
+          \t\t\tchoices: mapped.choices
+          \t\t\t\t.filter((choice) => choice !== implicit || keepImplicit)
+          \t\t\t\t.map((choice) => {
+          \t\t\t\t\tif (choice === implicit) return { ...choice, name: `${followLabel} (${versionedAliasLabel})` };
+          \t\t\t\t\tif (choice === concrete) return { ...choice, name: versionedAliasLabel };
+          \t\t\t\t\treturn choice;
+          \t\t\t\t}),
+          \t\t};
+          \t}
+          \tif (concrete && mapped.currentValue !== concrete.value) {'''
+          if source.count(old) != 1:
+              raise SystemExit("concrete alias anchor did not match exactly once")
+          source = source.replace(old, new)
+
+          path.write_text(source)
+          Path(".github/workflows/apply-5989-claude-alias-label.yml").unlink()
+          PY
+      - name: Run focused model-picker tests
+        working-directory: frontend
+        run: npm run test -- src/renderer/components/chat/TurnSettingsBar.latest-alias.test.tsx src/renderer/components/chat/TurnSettingsBar.test.tsx
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/renderer/components/chat/TurnSettingsBar.tsx frontend/src/renderer/components/chat/TurnSettingsBar.latest-alias.test.tsx .github/workflows/apply-5989-claude-alias-label.yml
+          git commit -m "fix(chat): expose concrete versions behind Claude aliases"
+          git push origin HEAD:fix/5989-claude-latest-model-alias-label
