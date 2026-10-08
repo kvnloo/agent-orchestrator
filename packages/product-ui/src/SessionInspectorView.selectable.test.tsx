@@ -1,14 +1,28 @@
 import { render, screen } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorSection,
+  inspectorEmptyClass,
 } from "./SessionInspectorView";
 import type { ExternalLinkProps } from "./external-link";
 
-function ExternalLink({ children, ...props }: ExternalLinkProps) {
-  return <a {...props}>{children}</a>;
+function ExternalLink({
+  ariaLabel,
+  children,
+  stopPropagation,
+  ...props
+}: ExternalLinkProps) {
+  return (
+    <a
+      {...props}
+      aria-label={ariaLabel}
+      onClick={stopPropagation ? (event) => event.stopPropagation() : undefined}
+    >
+      {children}
+    </a>
+  );
 }
 
 it("opts static inspector section copy into text selection without changing the action control", () => {
@@ -78,17 +92,11 @@ it("makes activity facts copyable", () => {
 });
 
 it("keeps loading and empty-state copy selectable", () => {
-  const onViewChange = vi.fn();
-  const { rerender } = render(
+  render(
     <div className="select-none">
-      <p className="text-xs text-settings-muted leading-normal">Loading session…</p>
+      <p className={inspectorEmptyClass}>Loading session…</p>
     </div>,
   );
 
-  // This mirrors the inspector's body-level no-selection inheritance and pins
-  // the exported empty-state class as the explicit opt-in surface.
-  const loading = screen.getByText("Loading session…");
-  expect(loading).toHaveClass("select-text");
-  void onViewChange;
-  rerender(<></>);
+  expect(screen.getByText("Loading session…")).toHaveClass("select-text");
 });
