@@ -1,0 +1,90 @@
+name: Apply 5751 no-signal prompt gate
+
+on:
+  push:
+    branches:
+      - fix/5751-no-signal-after-current-prompt-only
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5751-no-signal-after-current-prompt-only
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Gate no-signal on a prompt after the current spawn
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          contract = Path("backend/pkg/contract/status.go")
+          source = contract.read_text()
+          old = '''type SessionFacts struct {
+          \tActivity       ActivityState
+          \tLastActivityAt time.Time
+          \tHasSignal      bool
+          \tSignalExpected bool
+          \tIsTerminated   bool
+          }'''
+          new = '''type SessionFacts struct {
+          \tActivity          ActivityState
+          \tLastActivityAt    time.Time
+          \tHasSignal         bool
+          \tSignalExpected    bool
+          \tPromptedSinceSpawn bool
+          \tIsTerminated      bool
+          }'''
+          if source.count(old) != 1:
+              raise SystemExit("SessionFacts anchor did not match exactly once")
+          source = source.replace(old, new)
+          old = '''\treturn session.SignalExpected && !session.HasSignal &&
+          \t\tnow.Sub(session.LastActivityAt) > noSignalGrace'''
+          new = '''\treturn session.SignalExpected && session.PromptedSinceSpawn && !session.HasSignal &&
+          \t\tnow.Sub(session.LastActivityAt) > noSignalGrace'''
+          if source.count(old) != 1:
+              raise SystemExit("silentPastGrace anchor did not match exactly once")
+          contract.write_text(source.replace(old, new))
+
+          service = Path("backend/internal/service/session/status.go")
+          source = service.read_text()
+          old = '''\treturn contract.SessionFacts{
+          \t\tActivity:       contract.ActivityState(rec.Activity.State),
+          \t\tLastActivityAt: rec.Activity.LastActivityAt,
+          \t\tHasSignal:      !rec.FirstSignalAt.IsZero(),
+          \t\tSignalExpected: signalCapable && rec.Mode != domain.SessionModeChat,
+          \t\tIsTerminated:   rec.IsTerminated,
+          \t}'''
+          new = '''\treturn contract.SessionFacts{
+          \t\tActivity:           contract.ActivityState(rec.Activity.State),
+          \t\tLastActivityAt:     rec.Activity.LastActivityAt,
+          \t\tHasSignal:          !rec.FirstSignalAt.IsZero(),
+          \t\tSignalExpected:     signalCapable && rec.Mode != domain.SessionModeChat,
+          \t\tPromptedSinceSpawn: rec.Metadata.LatestUserPromptAt.After(rec.Activity.LastActivityAt),
+          \t\tIsTerminated:       rec.IsTerminated,
+          \t}'''
+          if source.count(old) != 1:
+              raise SystemExit("session fact projection anchor did not match exactly once")
+          service.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-5751-no-signal-prompt-gate.yml").unlink()
+          PY
+          gofmt -w backend/pkg/contract/status.go backend/pkg/contract/status_prompted_test.go backend/internal/service/session/status.go backend/internal/service/session/status_prompted_test.go
+      - name: Run focused status regressions
+        working-directory: backend
+        run: |
+          go test ./pkg/contract -run 'TestDeriveStatusNoSignal'
+          go test ./internal/service/session -run TestContractSessionFactsPromptedSinceCurrentSpawn
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/pkg/contract/status.go backend/pkg/contract/status_prompted_test.go backend/internal/service/session/status.go backend/internal/service/session/status_prompted_test.go .github/workflows/apply-5751-no-signal-prompt-gate.yml
+          git commit -m "fix(status): alarm only after a prompt in the current spawn"
+          git push origin HEAD:fix/5751-no-signal-after-current-prompt-only
