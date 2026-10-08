@@ -1,0 +1,57 @@
+name: Apply 6399 ACP patch
+
+on:
+  push:
+    branches:
+      - fix/6399-acp-validate-modern-model-choice
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6399-acp-validate-modern-model-choice
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Apply narrow ACP model validation
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/internal/adapters/chatdriver/acp/conversation.go")
+          source = path.read_text()
+          old = '''\t\tif (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+          \t\t\treturn nil
+          \t\t}
+          \t\tresp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{'''
+          new = '''\t\tif (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+          \t\t\treturn nil
+          \t\t}
+          \t\tif option.ID == "model" {
+          \t\t\tif offered, known := c.configOptionOffers("model", option.Value); known && !offered {
+          \t\t\t\treturn fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, option.Value)
+          \t\t\t}
+          \t\t}
+          \t\tresp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{'''
+          if source.count(old) != 1:
+              raise SystemExit("applyOption anchor did not match exactly once")
+          path.write_text(source.replace(old, new))
+          Path(".github/workflows/apply-6399-patch.yml").unlink()
+          PY
+          gofmt -w backend/internal/adapters/chatdriver/acp/conversation.go backend/internal/adapters/chatdriver/acp/model_option_validation_test.go
+      - name: Run focused ACP tests
+        working-directory: backend
+        run: go test ./internal/adapters/chatdriver/acp -run 'TestModernACPModel'
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/adapters/chatdriver/acp/conversation.go backend/internal/adapters/chatdriver/acp/model_option_validation_test.go .github/workflows/apply-6399-patch.yml
+          git commit -m "fix(acp): reject unadvertised modern model choices"
+          git push origin HEAD:fix/6399-acp-validate-modern-model-choice
