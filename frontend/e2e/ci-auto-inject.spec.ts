@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/test";
 import { openInspector } from "./support/open-inspector";
 
 test("CI auto-injection policy is visible before a PR exists", async ({ page }) => {

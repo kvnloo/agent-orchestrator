@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./support/test";
 import { installFakeBridge } from "./support/fake-bridge";
 import { openInspector } from "./support/open-inspector";
 
