@@ -1,0 +1,92 @@
+name: Apply 6444 OpenCode probe budget
+
+on:
+  push:
+    branches:
+      - fix/6444-opencode-windows-probe-budget
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6444-opencode-windows-probe-budget
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Coordinate platform probe and readiness deadlines
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          version = Path("backend/internal/adapters/agent/opencode/version.go")
+          source = version.read_text()
+          old_import = '''\t"regexp"
+          \t"strconv"'''
+          new_import = '''\t"regexp"
+          \t"runtime"
+          \t"strconv"'''
+          if source.count(old_import) != 1:
+              raise SystemExit("version import anchor did not match exactly once")
+          source = source.replace(old_import, new_import)
+          old = '''\tprobeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)'''
+          new = '''\tprobeCtx, cancel := context.WithTimeout(ctx, VersionProbeTimeout(runtime.GOOS))'''
+          if source.count(old) != 1:
+              raise SystemExit("version timeout anchor did not match exactly once")
+          source = source.replace(old, new)
+          # Version budget moved to version_budget.go; time remains used for WaitDelay.
+          version.write_text(source)
+
+          readiness = Path("backend/internal/service/agent/readiness_coordinator.go")
+          source = readiness.read_text()
+          old_import = '''\t"log/slog"
+          \t"sort"'''
+          new_import = '''\t"log/slog"
+          \t"runtime"
+          \t"sort"'''
+          if source.count(old_import) != 1:
+              raise SystemExit("readiness import anchor did not match exactly once")
+          source = source.replace(old_import, new_import)
+          old = '''\tctx, cancel := context.WithTimeout(c.ctx, c.installTimeout)'''
+          new = '''\ttimeout := installationCheckTimeoutForHarness(c.installTimeout, item.Harness, runtime.GOOS)
+          \tctx, cancel := context.WithTimeout(c.ctx, timeout)'''
+          if source.count(old) != 1:
+              raise SystemExit("readiness timeout anchor did not match exactly once")
+          readiness.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-6444-opencode-budget.yml").unlink()
+          PY
+          gofmt -w \
+            backend/internal/adapters/agent/opencode/version.go \
+            backend/internal/adapters/agent/opencode/version_budget.go \
+            backend/internal/adapters/agent/opencode/version_budget_test.go \
+            backend/internal/service/agent/readiness_coordinator.go \
+            backend/internal/service/agent/readiness_budget.go \
+            backend/internal/service/agent/readiness_opencode_budget_test.go
+      - name: Run focused budget regressions
+        working-directory: backend
+        run: |
+          go test ./internal/adapters/agent/opencode -run 'TestVersionProbeTimeout'
+          go test ./internal/service/agent -run 'TestInstallationCheckTimeout|TestOpenCodeReadinessBudget'
+      - name: Run owning package suites
+        working-directory: backend
+        run: go test ./internal/adapters/agent/opencode ./internal/adapters/agent/opencodev2 ./internal/service/agent
+      - name: Commit support patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            backend/internal/adapters/agent/opencode/version.go \
+            backend/internal/adapters/agent/opencode/version_budget.go \
+            backend/internal/adapters/agent/opencode/version_budget_test.go \
+            backend/internal/service/agent/readiness_coordinator.go \
+            backend/internal/service/agent/readiness_budget.go \
+            backend/internal/service/agent/readiness_opencode_budget_test.go \
+            .github/workflows/apply-6444-opencode-budget.yml
+          git commit -m "fix(opencode): give Windows version probes measured headroom"
+          git push origin HEAD:fix/6444-opencode-windows-probe-budget
