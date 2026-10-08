@@ -125,7 +125,7 @@ export const test = base.extend<RendererErrorFixtures>({
 			page.on("pageerror", onPageError);
 			page.on("console", onConsole);
 			try {
-				await use();
+				await use(undefined);
 			} finally {
 				page.off("pageerror", onPageError);
 				page.off("console", onConsole);
