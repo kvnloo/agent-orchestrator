@@ -1,0 +1,94 @@
+name: Apply 5043 workspace probe classification
+
+on:
+  push:
+    branches:
+      - fix/5043-workspace-probe-classification
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5043-workspace-probe-classification
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Port the assigned upstream fix onto current main
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          workspace = Path("backend/internal/adapters/workspace/gitworktree/workspace.go")
+          source = workspace.read_text()
+          old = '''func (w *Workspace) validateBranch(ctx context.Context, repo, branch string) error {
+          \tif _, err := w.run(ctx, w.binary, checkRefFormatBranchArgs(repo, branch)...); err != nil {
+          \t\treturn fmt.Errorf("%w: %q (%w)", ErrBranchInvalid, branch, err)
+          \t}
+          \treturn nil
+          }'''
+          new = '''func (w *Workspace) validateBranch(ctx context.Context, repo, branch string) error {
+          \tif _, err := w.run(ctx, w.binary, checkRefFormatBranchArgs(repo, branch)...); err != nil {
+          \t\tif probeInterrupted(err) {
+          \t\t\treturn fmt.Errorf("%w: %q (%w)", ErrBranchProbeFailed, branch, err)
+          \t\t}
+          \t\treturn fmt.Errorf("%w: %q (%w)", ErrBranchInvalid, branch, err)
+          \t}
+          \treturn nil
+          }'''
+          if source.count(old) != 1:
+              raise SystemExit("validateBranch anchor did not match exactly once")
+          workspace.write_text(source.replace(old, new))
+
+          service = Path("backend/internal/service/session/service.go")
+          source = service.read_text()
+          old = '''\tcase errors.Is(err, ports.ErrWorkspaceBranchNotFetched):
+          \t\treturn apierr.Invalid("BRANCH_NOT_FETCHED", err.Error(), nil)
+          \tcase errors.Is(err, ports.ErrWorkspaceBranchInvalid):
+          \t\treturn apierr.Invalid("INVALID_BRANCH", err.Error(), nil)'''
+          new = '''\tcase errors.Is(err, ports.ErrWorkspaceBranchNotFetched):
+          \t\treturn apierr.Invalid("BRANCH_NOT_FETCHED", err.Error(), nil)
+          \tcase errors.Is(err, ports.ErrWorkspaceProbeFailed):
+          \t\treturn apierr.Unavailable("WORKSPACE_PROBE_FAILED", err.Error())
+          \tcase errors.Is(err, ports.ErrWorkspaceBranchInvalid):
+          \t\treturn apierr.Invalid("INVALID_BRANCH", err.Error(), nil)'''
+          if source.count(old) != 1:
+              raise SystemExit("workspace API mapping anchor did not match exactly once")
+          service.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-5043-probe-classification.yml").unlink()
+          PY
+          gofmt -w \
+            backend/internal/ports/workspace_probe_error.go \
+            backend/internal/adapters/workspace/gitworktree/probe_error.go \
+            backend/internal/adapters/workspace/gitworktree/workspace.go \
+            backend/internal/adapters/workspace/gitworktree/workspace_probe_classification_test.go \
+            backend/internal/service/session/service.go \
+            backend/internal/service/session/workspace_probe_error_test.go
+      - name: Run focused classification tests
+        working-directory: backend
+        run: |
+          go test ./internal/adapters/workspace/gitworktree -run 'TestValidateBranch'
+          go test ./internal/service/session -run TestToAPIErrorMapsWorkspaceProbeFailureToUnavailable
+      - name: Run owning package suites
+        working-directory: backend
+        run: go test ./internal/adapters/workspace/gitworktree ./internal/service/session
+      - name: Commit refresh and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            backend/internal/ports/workspace_probe_error.go \
+            backend/internal/adapters/workspace/gitworktree/probe_error.go \
+            backend/internal/adapters/workspace/gitworktree/workspace.go \
+            backend/internal/adapters/workspace/gitworktree/workspace_probe_classification_test.go \
+            backend/internal/service/session/service.go \
+            backend/internal/service/session/workspace_probe_error_test.go \
+            .github/workflows/apply-5043-probe-classification.yml
+          git commit -m "fix(workspace): classify interrupted git probes as transient"
+          git push origin HEAD:fix/5043-workspace-probe-classification
