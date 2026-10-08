@@ -30,7 +30,8 @@ func executeWithDeps(deps Deps, args []string) error {
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
-	if err != nil && ExitCode(err) == 2 {
+	var localErr localInputError
+	if err != nil && ExitCode(err) == 2 && !errors.As(err, &localErr) {
 		(&commandContext{deps: deps}).emitCLIUsageError(context.Background(), args, err)
 	}
 	return err
@@ -43,6 +44,14 @@ type usageError struct{ err error }
 
 func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
+
+// localInputError marks validation that must finish without contacting the
+// daemon, including the usage-error telemetry path. The wrapped usageError
+// retains its normal exit code and diagnostic.
+type localInputError struct{ err error }
+
+func (e localInputError) Error() string { return e.err.Error() }
+func (e localInputError) Unwrap() error { return e.err }
 
 // ExitCode maps a CLI error to a process exit code: 2 for usage errors, 1 for
 // any other failure, 0 for success.

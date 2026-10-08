@@ -294,6 +294,7 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 
 func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	var opts projectSetConfigOptions
+	var config projectConfig
 	cmd := &cobra.Command{
 		Use:   "set-config <id>",
 		Short: "Set the per-project config",
@@ -309,14 +310,16 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			if strings.TrimSpace(args[0]) == "" {
 				return usageError{errors.New("usage: project id is required")}
 			}
+			// Cobra validates Args before the root's invocation telemetry hook.
+			var err error
+			config, err = buildProjectConfig(opts)
+			if err != nil {
+				return localInputError{err}
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := strings.TrimSpace(args[0])
-			config, err := buildProjectConfig(opts)
-			if err != nil {
-				return err
-			}
 			req := setConfigRequest{Config: config}
 			var res projectResult
 			if err := ctx.putJSON(cmd.Context(), "projects/"+url.PathEscape(id)+"/config", req, &res); err != nil {
@@ -325,7 +328,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			if opts.json {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "updated config for project %s\n", res.Project.ID)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "updated config for project %s\n", res.Project.ID)
 			return err
 		},
 	}
