@@ -1,0 +1,122 @@
+name: Apply 6219 change-log retention fix
+
+on:
+  push:
+    branches:
+      - fix/6219-change-log-retention-bounded-plan
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/6219-change-log-retention-bounded-plan
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Replace count scan with a sequence window and raise catch-up budget
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          retention = Path("backend/internal/cdc/retention.go")
+          source = retention.read_text()
+          old = '''\tDefaultRetentionBatch         int64 = 10_000
+          \tdefaultRetentionBatchesPerRun int   = 8'''
+          new = '''\tDefaultRetentionBatch int64 = 10_000
+          \t// Keep each transaction small, but allow one 15-minute run to catch up
+          \t// with sustained production rates above the old eight-batch ceiling.
+          \tdefaultRetentionBatchesPerRun int = 64'''
+          if source.count(old) != 1:
+              raise SystemExit("retention batch anchor did not match exactly once")
+          retention.write_text(source.replace(old, new))
+
+          query = Path("backend/internal/storage/sqlite/queries/changelog.sql")
+          source = query.read_text()
+          old = '''-- name: PruneChangeLogToMaxRows :execrows
+          DELETE FROM change_log
+          WHERE seq IN (
+              SELECT cl.seq
+              FROM change_log AS cl
+              ORDER BY cl.seq ASC
+              LIMIT MIN(sqlc.arg(batch_limit), MAX(0, (SELECT COUNT(*) FROM change_log) - sqlc.arg(max_rows)))
+          );'''
+          new = '''-- name: PruneChangeLogToMaxRows :execrows
+          -- The cap is a replay window in sequence numbers. MAX(seq) is a btree
+          -- edge lookup; COUNT(*) would scan the entire backlog on every batch.
+          DELETE FROM change_log
+          WHERE seq IN (
+              SELECT cl.seq
+              FROM change_log AS cl
+              WHERE cl.seq <= (SELECT MAX(newest.seq) FROM change_log AS newest) - sqlc.arg(max_rows)
+              ORDER BY cl.seq ASC
+              LIMIT sqlc.arg(batch_limit)
+          );'''
+          if source.count(old) != 1:
+              raise SystemExit("changelog SQL anchor did not match exactly once")
+          query.write_text(source.replace(old, new))
+
+          generated = Path("backend/internal/storage/sqlite/gen/changelog.sql.go")
+          source = generated.read_text()
+          old = '''const pruneChangeLogToMaxRows = `-- name: PruneChangeLogToMaxRows :execrows
+          DELETE FROM change_log
+          WHERE seq IN (
+              SELECT cl.seq
+              FROM change_log AS cl
+              ORDER BY cl.seq ASC
+              LIMIT MIN(?1, MAX(0, (SELECT COUNT(*) FROM change_log) - ?2))
+          )
+          `
+
+          type PruneChangeLogToMaxRowsParams struct {
+          \tBatchLimit interface{}
+          \tMaxRows    interface{}
+          }
+
+          func (q *Queries) PruneChangeLogToMaxRows(ctx context.Context, arg PruneChangeLogToMaxRowsParams) (int64, error) {
+          \tresult, err := q.db.ExecContext(ctx, pruneChangeLogToMaxRows, arg.BatchLimit, arg.MaxRows)'''
+          new = '''const pruneChangeLogToMaxRows = `-- name: PruneChangeLogToMaxRows :execrows
+          -- The cap is a replay window in sequence numbers. MAX(seq) is a btree
+          -- edge lookup; COUNT(*) would scan the entire backlog on every batch.
+          DELETE FROM change_log
+          WHERE seq IN (
+              SELECT cl.seq
+              FROM change_log AS cl
+              WHERE cl.seq <= (SELECT MAX(newest.seq) FROM change_log AS newest) - ?1
+              ORDER BY cl.seq ASC
+              LIMIT ?2
+          )
+          `
+
+          type PruneChangeLogToMaxRowsParams struct {
+          \tMaxRows    int64
+          \tBatchLimit int64
+          }
+
+          func (q *Queries) PruneChangeLogToMaxRows(ctx context.Context, arg PruneChangeLogToMaxRowsParams) (int64, error) {
+          \tresult, err := q.db.ExecContext(ctx, pruneChangeLogToMaxRows, arg.MaxRows, arg.BatchLimit)'''
+          if source.count(old) != 1:
+              raise SystemExit("generated changelog anchor did not match exactly once")
+          generated.write_text(source.replace(old, new))
+
+          Path(".github/workflows/apply-6219-retention-fix.yml").unlink()
+          PY
+          gofmt -w backend/internal/cdc/retention.go backend/internal/cdc/retention_backlog_test.go backend/internal/storage/sqlite/gen/changelog.sql.go backend/internal/storage/sqlite/gen/changelog_prune_plan_test.go backend/internal/storage/sqlite/store/changelog_sequence_window_test.go
+      - name: Run focused retention regressions
+        working-directory: backend
+        run: |
+          go test ./internal/cdc -run TestRetentionJanitorRunOnceClearsSustainedBurstBudget
+          go test ./internal/storage/sqlite/gen -run TestPruneChangeLogToMaxRowsPlanHasNoFullScan
+          go test ./internal/storage/sqlite/store -run TestChangeLogRetentionMaxRowsIsASequenceWindowNotACount
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/cdc/retention.go backend/internal/cdc/retention_backlog_test.go backend/internal/storage/sqlite/queries/changelog.sql backend/internal/storage/sqlite/gen/changelog.sql.go backend/internal/storage/sqlite/gen/changelog_prune_plan_test.go backend/internal/storage/sqlite/store/changelog_sequence_window_test.go .github/workflows/apply-6219-retention-fix.yml
+          git commit -m "fix(sqlite): prune change log by sequence window"
+          git push origin HEAD:fix/6219-change-log-retention-bounded-plan
