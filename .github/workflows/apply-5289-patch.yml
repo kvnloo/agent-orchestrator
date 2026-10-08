@@ -1,0 +1,65 @@
+name: Apply 5289 ACP patch
+
+on:
+  push:
+    branches:
+      - fix/5289-acp-failed-stop-reason-message
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/5289-acp-failed-stop-reason-message
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Apply narrow failed-stop detail fix
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/internal/adapters/chatdriver/acp/conversation.go")
+          source = path.read_text()
+          old = '''\t\tif c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+          \t\t\tif failure := c.promptResponseFailure(resp); failure != nil {
+          \t\t\t\tstate = domain.TurnStateFailed
+          \t\t\t\tturnErr = failure
+          \t\t\t}
+          \t\t}
+          \t\tif resp.Usage != nil {'''
+          new = '''\t\tif c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+          \t\t\tif failure := c.promptResponseFailure(resp); failure != nil {
+          \t\t\t\tstate = domain.TurnStateFailed
+          \t\t\t\tturnErr = failure
+          \t\t\t}
+          \t\t}
+          \t\tif state == domain.TurnStateFailed && turnErr == nil {
+          \t\t\treason := strings.TrimSpace(string(resp.StopReason))
+          \t\t\tif reason == "" {
+          \t\t\t\treason = "unknown stop reason"
+          \t\t\t}
+          \t\t\tturnErr = fmt.Errorf("ACP session/prompt stopped before completion (%s)", reason)
+          \t\t}
+          \t\tif resp.Usage != nil {'''
+          if source.count(old) != 1:
+              raise SystemExit("finishPrompt anchor did not match exactly once")
+          path.write_text(source.replace(old, new))
+          Path(".github/workflows/apply-5289-patch.yml").unlink()
+          PY
+          gofmt -w backend/internal/adapters/chatdriver/acp/conversation.go backend/internal/adapters/chatdriver/acp/failed_stop_reason_test.go
+      - name: Run focused ACP tests
+        working-directory: backend
+        run: go test ./internal/adapters/chatdriver/acp -run 'TestFailedACPStopReasonCarriesTurnCompletionError|TestACPDriverPromptResponseFailure'
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/internal/adapters/chatdriver/acp/conversation.go backend/internal/adapters/chatdriver/acp/failed_stop_reason_test.go .github/workflows/apply-5289-patch.yml
+          git commit -m "fix(acp): preserve failed stop-reason detail"
+          git push origin HEAD:fix/5289-acp-failed-stop-reason-message
