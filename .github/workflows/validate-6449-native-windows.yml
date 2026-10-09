@@ -1,0 +1,41 @@
+name: Validate 6449 exact candidate on native Windows
+
+on:
+  push:
+    branches: [ci/6449-native-windows-f069b4357-20261008]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout validation infrastructure only
+        uses: actions/checkout@v4
+        with:
+          path: validation
+          persist-credentials: false
+      - name: Checkout immutable candidate
+        uses: actions/checkout@v4
+        with:
+          ref: f069b4357d0fe1256f964d676a5cc7d5188a9d9f
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/backend/go.mod
+          cache-dependency-path: source/backend/go.sum
+      - name: Native identity, RED controls, GREEN relevant suites
+        shell: pwsh
+        run: python validation/.github/validation/6449/validate.py source receipts
+      - name: Save exact-source validation receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-6449-f069b4357
+          path: receipts
+          if-no-files-found: error
