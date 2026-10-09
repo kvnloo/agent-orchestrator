@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"reflect"
 	"sort"
@@ -293,6 +294,7 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 
 func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	var opts projectSetConfigOptions
+	var config projectConfig
 	cmd := &cobra.Command{
 		Use:   "set-config <id>",
 		Short: "Set the per-project config",
@@ -308,14 +310,16 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			if strings.TrimSpace(args[0]) == "" {
 				return usageError{errors.New("usage: project id is required")}
 			}
+			// Cobra validates Args before the root's invocation telemetry hook.
+			var err error
+			config, err = buildProjectConfig(opts)
+			if err != nil {
+				return localInputError{err}
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := strings.TrimSpace(args[0])
-			config, err := buildProjectConfig(opts)
-			if err != nil {
-				return err
-			}
 			req := setConfigRequest{Config: config}
 			var res projectResult
 			if err := ctx.putJSON(cmd.Context(), "projects/"+url.PathEscape(id)+"/config", req, &res); err != nil {
@@ -324,7 +328,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			if opts.json {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "updated config for project %s\n", res.Project.ID)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "updated config for project %s\n", res.Project.ID)
 			return err
 		},
 	}
@@ -362,7 +366,16 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 	}
 	if opts.configJSON != "" {
 		var cfg projectConfig
-		if err := json.Unmarshal([]byte(opts.configJSON), &cfg); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(opts.configJSON))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&cfg); err != nil {
+			return projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			if err == nil {
+				err = errors.New("multiple JSON values")
+			}
 			return projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
 		}
 		return cfg, nil
