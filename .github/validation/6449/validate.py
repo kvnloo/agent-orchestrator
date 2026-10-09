@@ -59,9 +59,19 @@ identity = {"platform": platform.platform(), "system": platform.system(), "machi
 print("NATIVE_IDENTITY " + json.dumps(identity), flush=True)
 (receipts / "identity.json").write_text(json.dumps(identity, indent=2), encoding="utf-8")
 clean()
+# Preserve canonical workspace module selection without Go writing go.work.sum
+# into the immutable checkout. No dependency versions or assertions change.
+workspace_dir = receipts / "go-workspace"
+workspace_dir.mkdir(exist_ok=True)
+workspace_text = (source / "go.work").read_text(encoding="utf-8")
+for module in ("backend", "cloud"):
+    workspace_text = workspace_text.replace("./" + module, json.dumps((source / module).as_posix()))
+(workspace_dir / "go.work").write_text(workspace_text, encoding="utf-8")
+shutil.copyfile(source / "go.work.sum", workspace_dir / "go.work.sum")
+os.environ["GOWORK"] = str(workspace_dir / "go.work")
 run("go-version", ["go", "version"])
 assert run("goos", ["go", "env", "GOOS"]) == "windows"
-run("go-env", ["go", "env", "GOOS", "GOARCH", "CGO_ENABLED", "CC", "GOVERSION"])
+run("go-env", ["go", "env", "GOOS", "GOARCH", "CGO_ENABLED", "CC", "GOVERSION", "GOWORK"])
 manager = source / "backend/internal/session_manager/manager.go"
 original = manager.read_bytes()
 try:
