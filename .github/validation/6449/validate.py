@@ -59,16 +59,18 @@ identity = {"platform": platform.platform(), "system": platform.system(), "machi
 print("NATIVE_IDENTITY " + json.dumps(identity), flush=True)
 (receipts / "identity.json").write_text(json.dumps(identity, indent=2), encoding="utf-8")
 clean()
-# Preserve canonical workspace module selection without Go writing go.work.sum
-# into the immutable checkout. No dependency versions or assertions change.
-workspace_dir = receipts / "go-workspace"
-workspace_dir.mkdir(exist_ok=True)
-workspace_text = (source / "go.work").read_text(encoding="utf-8")
-for module in ("backend", "cloud"):
-    workspace_text = workspace_text.replace("./" + module, json.dumps((source / module).as_posix()))
-(workspace_dir / "go.work").write_text(workspace_text, encoding="utf-8")
-shutil.copyfile(source / "go.work.sum", workspace_dir / "go.work.sum")
-os.environ["GOWORK"] = str(workspace_dir / "go.work")
+# Use the repository's canonical workspace, as the official workflow does.
+# Go can update only its checksum cache during resolution; save that exact diff
+# and restore the initial bytes before the immutable-source readback.
+workspace_sum = source / "go.work.sum"
+workspace_sum_original = workspace_sum.read_bytes()
+os.environ["GOWORK"] = str(source / "go.work")
+
+def restore_workspace_sum(label):
+    diff = subprocess.check_output(["git", "diff", "--", "go.work.sum"], cwd=source)
+    (receipts / (label + "-go-work-sum.diff")).write_bytes(diff)
+    workspace_sum.write_bytes(workspace_sum_original)
+
 run("go-version", ["go", "version"])
 assert run("goos", ["go", "env", "GOOS"]) == "windows"
 run("go-env", ["go", "env", "GOOS", "GOARCH", "CGO_ENABLED", "CC", "GOVERSION", "GOWORK"])
@@ -82,6 +84,7 @@ try:
         "./internal/session_manager"], tests=True, red="TestRetireForReplacementStopsChatController")
 finally:
     manager.write_bytes(original)
+    restore_workspace_sum("after-red")
 clean()
 run("green-retirement", ["go", "test", "-race", "-count=1", "-timeout=5m", "-json", "-run", "^TestRetireForReplacement", "./internal/session_manager"], tests=True)
 run("green-workspace-kill", ["go", "test", "-race", "-count=1", "-timeout=10m", "-json", "-run", "Destroy|Discard|Sweep|Kill", "./internal/adapters/workspace/...", "./internal/session_manager"], tests=True)
@@ -103,5 +106,6 @@ try:
         manager.write_bytes(original)
 finally:
     target.unlink(missing_ok=True)
+    restore_workspace_sum("after-suites")
 clean()
 print("NATIVE_WINDOWS_VALIDATION_PASS tested_source_sha=" + HEAD, flush=True)
