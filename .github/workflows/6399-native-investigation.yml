@@ -1,0 +1,36 @@
+name: ACP 6399 native shutdown investigation
+on:
+  push:
+    branches: [ci/6399-native-investigation-20261009]
+permissions:
+  contents: read
+jobs:
+  windows-exact-head:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: infrastructure
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: f011c2b0c32241602e9d84691b8b8f1ba84ac4bc
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/backend/go.mod
+          cache-dependency-path: source/backend/go.sum
+      - name: Exact-head bounded lifecycle repeats and original-base control
+        shell: pwsh
+        run: python infrastructure/test/receipt6399/native_probe.py source receipts
+      - name: Upload complete receipts even when a test fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acp-6399-windows-receipts
+          path: receipts
+          retention-days: 14
+          if-no-files-found: error
