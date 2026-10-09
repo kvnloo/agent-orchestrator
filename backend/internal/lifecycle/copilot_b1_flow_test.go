@@ -75,3 +75,25 @@ func TestCopilotB1_CompleteActivityFlows(t *testing.T) {
 		}
 	})
 }
+
+
+// Review regression for upstream PR #6427: a postToolUse from a *different*
+// background tool must not clear a still-visible permission dialog. Copilot
+// maps every postToolUse to permission-resolved, not just the approved tool.
+func TestCopilotB1_UnrelatedToolCompletionDoesNotDismissPendingApproval(t *testing.T) {
+	m, st, _ := newManager()
+	seedSignaled(st, "copilot-unrelated-post", domain.ActivityActive)
+
+	// One background read is running while another tool prompts the human.
+	mustApply(t, m, "copilot-unrelated-post", sig(domain.ActivityActive, "pre-tool-use", "read_file", "background-1"))
+	mustApply(t, m, "copilot-unrelated-post", sig(domain.ActivityWaitingInput, "notification", "bash", "approval-2"))
+	if got := stateOf(st, "copilot-unrelated-post"); got != domain.ActivityWaitingInput {
+		t.Fatalf("after pending approval = %q, want waiting_input", got)
+	}
+
+	// The unrelated read finishes; the human has not answered the bash dialog.
+	mustApply(t, m, "copilot-unrelated-post", sig(domain.ActivityActive, "permission-resolved", "read_file", "background-1"))
+	if got := stateOf(st, "copilot-unrelated-post"); got != domain.ActivityWaitingInput {
+		t.Fatalf("unrelated tool post cleared a pending approval: got %q, want waiting_input", got)
+	}
+}
