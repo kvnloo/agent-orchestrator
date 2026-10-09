@@ -1905,6 +1905,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
 	if err != nil {
+		captureSessionSendFailureContext(r, c.Svc, sessionID(r))
 		envelope.WriteError(w, r, err)
 		return
 	}

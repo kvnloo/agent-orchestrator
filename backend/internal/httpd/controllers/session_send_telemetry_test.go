@@ -109,9 +109,9 @@ func TestSessionSendFailureCapturesTUIRuntimeState(t *testing.T) {
 
 func TestSessionSendFailureCapturesDurableTerminalStates(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		mutate  func(*domain.Session)
-		want    string
+		name   string
+		mutate func(*domain.Session)
+		want   string
 	}{
 		{
 			name: "provisioning",
