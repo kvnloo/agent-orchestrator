@@ -2,6 +2,7 @@ name: ACP 6399 native shutdown investigation
 on:
   push:
     branches: [ci/6399-native-investigation-20261009]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
