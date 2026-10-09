@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func (e *IncompatibleVersionError) Error() string {
 // does not search past an incompatible PATH selection or cache a result across
 // attempts: both official majors use the same executable name.
 func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, VersionProbeTimeout(runtime.GOOS))
 	defer cancel()
 	binary, err := ResolveOpenCodeBinary(probeCtx)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -529,7 +530,8 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
-	ctx, cancel := context.WithTimeout(c.ctx, c.installTimeout)
+	timeout := installationCheckTimeoutForHarness(c.installTimeout, item.Harness, runtime.GOOS)
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	var path string
 	var err error
