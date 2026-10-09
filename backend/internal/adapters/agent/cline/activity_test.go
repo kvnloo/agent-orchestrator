@@ -142,3 +142,24 @@ func TestClineManagedHooksClearCompletedTurns(t *testing.T) {
 		t.Errorf("missing managed %s hook", event)
 	}
 }
+
+	
+// Regression evidence for upstream PR #6435: transcript text that merely
+// *mentions* approval must not be interpreted as a live tool-approval prompt.
+func TestDetectTerminalActivityRejectsApprovalProseWithoutDialog(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		output string
+	}{
+		{"approval phrase in prose", "The documentation calls the button Approve tool call; this line is plain text.\n"},
+		{"approve and deny together", "I approve the migration plan but deny that the docs are current.\n"},
+		{"approval choices quoted in text", "The manual says [y] approve or [n] deny to answer an approval request.\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := (&Plugin{}).DetectTerminalActivity(tt.output)
+			if ok {
+				t.Fatalf("transcript only: DetectTerminalActivity() = (%q, true), want no activity signal", got)
+			}
+		})
+	}
+}
