@@ -372,7 +372,7 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 			return projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
 		}
 		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 			if err == nil {
 				err = errors.New("multiple JSON values")
 			}
