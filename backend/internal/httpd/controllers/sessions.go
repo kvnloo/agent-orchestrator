@@ -1905,10 +1905,47 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
 	if err != nil {
+		c.recordSendFailureSessionFacts(r)
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
+}
+
+// recordSendFailureSessionFacts adds coarse session context to a failed send so
+// its telemetry can be segmented by interface and runtime state. Only bounded
+// enum values are recorded, never the session id. A lookup failure is ignored:
+// it must not replace the send error being reported.
+func (c *SessionsController) recordSendFailureSessionFacts(r *http.Request) {
+	session, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		return
+	}
+	envelope.SetTelemetryField(r, "session_mode", string(domain.NormalizeSessionMode(session.Mode)))
+	envelope.SetTelemetryField(r, "session_runtime_state", sendFailureRuntimeState(session))
+}
+
+// sendFailureRuntimeState reduces a session to the one state that best explains
+// why a send could not be delivered. Durable states that make a session
+// unsendable win over its last observed activity.
+func sendFailureRuntimeState(session domain.Session) string {
+	switch {
+	case session.IsTerminated:
+		return "terminated"
+	case session.HibernatedAt != nil:
+		return "hibernated"
+	case session.ProvisionState == domain.SessionProvisionProvisioning:
+		return "provisioning"
+	case session.Activity.State == domain.ActivityExited:
+		return "exited"
+	case domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat && !session.ChatProviderPreserved:
+		return "chat_unavailable"
+	}
+	switch session.Activity.State {
+	case domain.ActivityActive, domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked:
+		return string(session.Activity.State)
+	}
+	return "unknown"
 }
 
 func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request) {

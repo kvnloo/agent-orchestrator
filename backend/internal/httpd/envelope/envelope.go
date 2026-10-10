@@ -31,8 +31,10 @@ type CapturedError struct {
 type errCaptureKey struct{}
 
 var safeTelemetryFields = map[string]struct{}{
-	"browser_command":    {},
-	"runtime_link_state": {},
+	"browser_command":       {},
+	"runtime_link_state":    {},
+	"session_mode":          {},
+	"session_runtime_state": {},
 }
 
 // WithErrorCapture returns a copy of the request whose context carries an

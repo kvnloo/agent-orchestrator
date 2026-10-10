@@ -109,9 +109,9 @@ func TestSessionSendFailureCapturesTUIRuntimeState(t *testing.T) {
 
 func TestSessionSendFailureCapturesDurableTerminalStates(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		mutate  func(*domain.Session)
-		want    string
+		name   string
+		mutate func(*domain.Session)
+		want   string
 	}{
 		{
 			name: "provisioning",
@@ -151,5 +151,41 @@ func TestSessionSendFailureCapturesDurableTerminalStates(t *testing.T) {
 				t.Fatalf("session_runtime_state = %#v, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSessionSendFailureWithoutLookupStillReportsTheSendError(t *testing.T) {
+	base := newFakeSessionService()
+	delete(base.sessions, "ao-1")
+	sendErr := errors.New("runtime transport failed")
+	svc := &failingSendSessionService{fakeSessionService: base, err: sendErr}
+
+	router := chi.NewRouter()
+	controller := &controllers.SessionsController{Svc: svc}
+	controller.Register(router)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/sessions/ao-1/send",
+		bytes.NewBufferString(`{"message":"follow up"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req, captured := envelope.WithErrorCapture(req)
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	got := captured()
+	// The session could not be read, so no session facts are guessed, and the
+	// lookup failure does not replace the error being reported.
+	if !errors.Is(got.Err, sendErr) {
+		t.Fatalf("captured error = %v, want the send error", got.Err)
+	}
+	for _, key := range []string{"session_mode", "session_runtime_state"} {
+		if _, present := got.Fields[key]; present {
+			t.Fatalf("%s recorded without a session: %#v", key, got.Fields)
+		}
 	}
 }
