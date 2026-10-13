@@ -696,4 +696,35 @@ describe("WorkspaceReviewPane", () => {
 		await waitFor(() => expect(postMock).toHaveBeenCalled());
 		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["package-lock.json"]);
 	});
+
+	it("bounds diff work in a 300-file Changes review until the reader requests more, but still searches every file", async () => {
+		const files = Array.from({ length: 300 }, (_, index) => ({
+			path: `src/changed-${String(index).padStart(3, "0")}.ts`,
+			status: "modified" as const,
+			additions: 1,
+			deletions: 1,
+			size: 20,
+			binary: false,
+			fileFingerprint: `revision-${index}`,
+		}));
+		const data = workspace(files);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const mount = (filter: string) => <QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter={filter} onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
+		const requests = () => postMock.mock.calls.flatMap((call) => (call[1]?.body?.paths ?? []) as string[]);
+		const view = render(mount(""));
+
+		await waitFor(() => expect(requests()).toContain("src/changed-095.ts"));
+		expect(requests()).not.toContain("src/changed-096.ts");
+		expect(screen.getByText(/showing 96 of 300 changed files/i)).toBeInTheDocument();
+		expect(screen.queryByText("src/changed-096.ts")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Load next 96 files" }));
+		await waitFor(() => expect(requests()).toContain("src/changed-096.ts"));
+		expect(screen.getByText("src/changed-096.ts")).toBeInTheDocument();
+
+		view.rerender(mount("changed-299"));
+		await waitFor(() => expect(requests()).toContain("src/changed-299.ts"));
+		expect(screen.getByText("src/changed-299.ts")).toBeInTheDocument();
+	});
+
 });

@@ -55,6 +55,10 @@ const REVIEW_CODE_VIEW_THEME = { dark: "github-dark", light: "github-light" } as
 // row stays and still loads on click.
 const MAX_END_OF_FILE_PREFETCHES = 40;
 const END_OF_FILE_PREFETCH_MAX_BYTES = 128 * 1024;
+// Limit both automatic requests and rendered placeholders in unusually large
+// reviews. Readers can reveal subsequent pages or explicitly load everything.
+const LARGE_REVIEW_THRESHOLD = 256;
+const LARGE_REVIEW_PAGE_SIZE = WORKSPACE_REVIEW_BATCH_SIZE * 4;
 export type ReviewSourceMenu = {
 	/** Short description of the current review source, shown on the trigger. */
 	label: string;
@@ -197,6 +201,7 @@ export function WorkspaceReviewPane({
 	const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
 	const [loadedDeferredPaths, setLoadedDeferredPaths] = useState<Set<string>>(() => new Set());
 	const [activeBatchCount, setActiveBatchCount] = useState(WORKSPACE_REVIEW_INITIAL_BATCHES);
+	const [largeReviewReveal, setLargeReviewReveal] = useState<{ target: string; limit: number } | null>(null);
 	const reviewRef = useRef<HTMLDivElement>(null);
 	const gutterHover = usePersistentGutterUtility(reviewRef);
 	// Set when a file row's overflow menu hands off to another surface (an editor,
@@ -237,6 +242,13 @@ export function WorkspaceReviewPane({
 		[allFiles, normalizedFilter],
 	);
 	const viewedSessionKey = sessionUiKey(sessionId, hostId);
+	// The key prevents the previous review's "load all" choice from causing an
+	// eager fetch storm on the first render of a different workspace or commit.
+	const largeReviewTarget = `${viewedSessionKey}:${reviewSelectionKey}:${data.workspaceVersion ?? "legacy"}`;
+	const isLargeReview = files.length > LARGE_REVIEW_THRESHOLD;
+	const visibleLimit = largeReviewReveal?.target === largeReviewTarget ? largeReviewReveal.limit : LARGE_REVIEW_PAGE_SIZE;
+	const shownFiles = useMemo(() => isLargeReview ? files.slice(0, visibleLimit) : files, [files, isLargeReview, visibleLimit]);
+	const hiddenFileCount = files.length - shownFiles.length;
 	const { viewed, toggle: toggleViewed } = useViewedFiles(viewedSessionKey, reviewSelectionKey, allFiles);
 
 	// Reset the collapse / deferred / batch state only when the review target
@@ -253,8 +265,8 @@ export function WorkspaceReviewPane({
 	}, [data.workspaceVersion, reviewSelectionKey, viewedSessionKey]);
 
 	const requestedFiles = useMemo(
-		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
-		[files, loadedDeferredPaths],
+		() => shownFiles.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
+		[shownFiles, loadedDeferredPaths],
 	);
 	const batches = useMemo(() => chunked(requestedFiles.map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [requestedFiles]);
 	const patchQueries = useQueries({
@@ -324,7 +336,7 @@ export function WorkspaceReviewPane({
 		return result;
 	}, [batches, patchQueries]);
 
-	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
+	const summaryById = useMemo(() => new Map(shownFiles.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [shownFiles, reviewSelectionKey]);
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
@@ -356,8 +368,8 @@ export function WorkspaceReviewPane({
 	// Keyed by patch content (not workspace version), so a refresh that leaves a
 	// file's diff unchanged reuses the contents instead of flashing the row back.
 	const endOfFileFiles = useMemo(
-		() => files.filter((file) => endOfFilePaths.has(file.path) && file.size <= END_OF_FILE_PREFETCH_MAX_BYTES).slice(0, MAX_END_OF_FILE_PREFETCHES),
-		[endOfFilePaths, files],
+		() => shownFiles.filter((file) => endOfFilePaths.has(file.path) && file.size <= END_OF_FILE_PREFETCH_MAX_BYTES).slice(0, MAX_END_OF_FILE_PREFETCHES),
+		[endOfFilePaths, shownFiles],
 	);
 	const endOfFileContents = useQueries({
 		queries: endOfFileFiles.map((file) => {
@@ -391,7 +403,7 @@ export function WorkspaceReviewPane({
 				const hydrated = metadata && query?.data ? hydratedCopy(metadata, query.data) : null;
 				if (hydrated) endOfFile.set(file.path, hydrated);
 			});
-			return files.flatMap((file): CodeViewItem<"feedback">[] => {
+			return shownFiles.flatMap((file): CodeViewItem<"feedback">[] => {
 				if (file.binary) return [];
 				const metadata = metadataByPath.get(file.path);
 				if (!metadata) return [];
@@ -429,7 +441,7 @@ export function WorkspaceReviewPane({
 				return [item];
 			});
 		},
-		[annotation.targets, collapsedPaths, endOfFileContents, endOfFileFiles, files, metadataByPath, reviewSelectionKey],
+		[annotation.targets, collapsedPaths, endOfFileContents, endOfFileFiles, shownFiles, metadataByPath, reviewSelectionKey],
 	);
 
 	const beginLineAnnotation = useCallback((itemId: string, lineNumber: number, side: "deletions" | "additions") => {
@@ -604,6 +616,21 @@ export function WorkspaceReviewPane({
 				<>
 			{firstError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{firstError.message}</PanelMessage> : null}
 			{groupError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{groupError.message}</PanelMessage> : null}
+			{isLargeReview ? (
+				<div className="mx-3 my-2 flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-caption text-muted-foreground" role="status">
+					<span className="min-w-0 flex-1">{t("files.largeReviewNotice", { shown: shownFiles.length, total: files.length })}</span>
+					{hiddenFileCount > 0 ? (
+						<>
+							<Button onClick={() => setLargeReviewReveal({ target: largeReviewTarget, limit: Math.min(files.length, shownFiles.length + LARGE_REVIEW_PAGE_SIZE) })} size="sm" type="button" variant="outline">
+								{t("files.largeReviewLoadNext", { count: Math.min(hiddenFileCount, LARGE_REVIEW_PAGE_SIZE) })}
+							</Button>
+							<Button onClick={() => setLargeReviewReveal({ target: largeReviewTarget, limit: files.length })} size="sm" type="button" variant="ghost">
+								{t("files.largeReviewLoadAll")}
+							</Button>
+						</>
+					) : null}
+				</div>
+			) : null}
 			{loading && items.length === 0 ? <PanelMessage compact>{t("files.loadingDiff")}</PanelMessage> : null}
 			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? t(hasAnyReviewFiles ? "files.noneInSource" : "files.noneChanged") : t("files.noFilterMatches")}</PanelMessage> : null}
 			<div className="min-h-0 flex-1 overflow-hidden">
@@ -794,7 +821,7 @@ export function WorkspaceReviewPane({
 					/>
 				) : null}
 				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
-				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
+				{shownFiles.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
 					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
 					const serverDeferredReason = serverDeferredByPath.get(file.path);
 					const pending = pendingDiffPaths.has(file.path);
